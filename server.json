@@ -1,0 +1,30 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.SavasTanriverdi/moho-studio-mcp",
+  "title": "Moho Studio MCP",
+  "description": "MCP server and Lua 5.4 plugin for live 2D animation, rigging, glTF, and CLI rendering in Moho 14.4",
+  "version": "3.0.0",
+  "websiteUrl": "https://github.com/SavasTanriverdi/moho-studio-mcp",
+  "repository": {
+    "url": "https://github.com/SavasTanriverdi/moho-studio-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "moho-studio-mcp",
+      "version": "3.0.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "MOHO_STUDIO_IPC_DIR",
+          "description": "Optional override for the local IPC directory shared with the Moho Lua plugin (defaults to %TEMP%\\moho-studio-mcp).",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}
