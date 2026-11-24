@@ -141,3 +141,5 @@ npm test
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+Directory listing: [Glama MCP Server Directory](https://glama.ai/mcp/servers/SavasTanriverdi/moho-studio-mcp).
