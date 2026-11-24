@@ -16,7 +16,8 @@
     "README.md",
     "LICENSE",
     "llms.txt",
-    "server.json"
+    "server.json",
+    "glama.json"
   ],
   "engines": {
     "node": ">=20.0.0"
