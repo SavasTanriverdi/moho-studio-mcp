@@ -6,6 +6,16 @@ It lets an MCP client (Claude Desktop, Cursor, VS Code, Codex, Antigravity, or a
 
 The server is written in Node.js ESM with zero npm runtime dependencies (`src/`), and the plugin is plain Lua 5.4 (`moho-plugin/`).
 
+## Demo
+
+Scene built, rigged, animated, and rendered live inside Moho Pro 14.4 by an MCP agent using this server (79 editable layers, Liquid Shapes, Vitruvian weapon swap, Smart Bone expressions, baked 2D rigid-body shard physics, FBF impact frames, 4 Layer Comps, headless `Moho.exe -r` CLI render, and a 2.5 MB `.glb` glTF 2.0 export).
+
+| Rendered Output | Live Moho Pro 14.4 Project and Timeline |
+| :---: | :---: |
+| ![Slime Knight rendered output](https://github.com/SavasTanriverdi/moho-studio-mcp/releases/download/v3.0.0/slime_knight_readme.gif) | ![Live Moho Pro 14.4 viewport, rig, and timeline](https://github.com/SavasTanriverdi/moho-studio-mcp/releases/download/v3.0.0/moho_ide_live.png) |
+
+Full 1080p 24fps render: [slime_knight_boss_fight_1080p.mp4](https://github.com/SavasTanriverdi/moho-studio-mcp/releases/download/v3.0.0/slime_knight_boss_fight_1080p.mp4)
+
 ## Requirements
 
 - Windows 10 or Windows 11 (x64). The background window wake and capture helpers use Win32 `EnumWindows`, `PrintWindow`, and `PostMessage`.
