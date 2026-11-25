@@ -25,7 +25,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/SavasTanriverdi/moho-studio-mcp.git"
+    "url": "git+https://github.com/SavasTanriverdi/moho-studio-mcp.git"
   },
   "homepage": "https://github.com/SavasTanriverdi/moho-studio-mcp#readme",
   "bugs": {
