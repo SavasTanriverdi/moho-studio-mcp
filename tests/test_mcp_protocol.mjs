@@ -48,9 +48,10 @@ async function run() {
     { jsonrpc: "2.0", id: 7, method: "prompts/list", params: {} },
     { jsonrpc: "2.0", id: 8, method: "prompts/get", params: { name: "rig_character", arguments: { characterName: "Hero", style: "vector" } } },
     { jsonrpc: "2.0", id: 9, method: "prompts/get", params: { name: "import_lipsync_animation", arguments: {} } },
+    { jsonrpc: "2.0", id: 10, method: "resources/templates/list", params: {} },
   ]);
 
-  assert.equal(lines.length, 9, `Expected 9 JSON-RPC responses, got ${lines.length}`);
+  assert.equal(lines.length, 10, `Expected 10 JSON-RPC responses, got ${lines.length}`);
 
   const init = lines[0];
   assert.equal(init.result.protocolVersion, "2025-03-26");
@@ -59,6 +60,10 @@ async function run() {
   assert.ok(init.result.capabilities.tools);
   assert.ok(init.result.capabilities.resources);
   assert.ok(init.result.capabilities.prompts);
+  assert.equal(typeof init.result.instructions, "string");
+  for (const needle of ["moho_status", "rig_getControls", "batch_execute", "rig_audit", "document_renderFrame"]) {
+    assert.ok(init.result.instructions.includes(needle), `initialize.instructions missing '${needle}'`);
+  }
 
   const ping = lines[1];
   assert.deepEqual(ping.result, {});
@@ -175,7 +180,8 @@ async function run() {
     }
   }
 
-  // Existing Phase 1-4 schema assertions
+  // Core layer, bone, warp, glTF, and animation channel schema assertions
+  assert.equal(names.size, toolsResp.result.tools.length, "Duplicate tool names detected in tools/list");
   assert.ok(byName.get("layer_create").inputSchema.properties.type.enum.includes("patch"));
   assert.ok(byName.get("bone_create").inputSchema.properties.pinBone);
   assert.ok(byName.get("bone_create").inputSchema.properties.headRef);
@@ -219,6 +225,9 @@ async function run() {
   assert.ok(promptGetOk.result.messages[0].content.text.includes("rig_audit"));
   const promptGetErr = lines[8];
   assert.ok(promptGetErr.error && promptGetErr.error.code === -32602, "Missing required prompt arg should return -32602");
+
+  const resTemplates = lines[9];
+  assert.deepEqual(resTemplates.result, { resourceTemplates: [] });
 
   // Legacy 2024-11-05 negotiation + core profile filtering check
   const coreLines = await runSession(

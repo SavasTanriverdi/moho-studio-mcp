@@ -41,6 +41,14 @@ const { profile: ACTIVE_PROFILE } = parseServerArgs(rawArgs);
 const ACTIVE_TOOLS = getToolsForProfile(ACTIVE_PROFILE);
 const ipc = new MohoIpcClient();
 
+const SERVER_INSTRUCTIONS = [
+  "Moho Studio MCP controls a live Moho Pro 14.4 desktop session over local atomic file IPC.",
+  "Start sessions with `moho_status` and read `moho-studio://playbook` before making structural edits.",
+  "Before animating an existing character rig, call `rig_getControls` to inspect its Smart Bone Dials (including action angle sweeps), IK targets, Switch layers, Vitruvian groups, and Regular Actions, and drive those controls instead of moving raw mesh vertices.",
+  "Use `batch_execute` to combine multi-bone, multi-layer, or multi-keyframe mutations into a single Undo step.",
+  "Run `rig_audit` after rigging changes, `rig_auditGltf` before `document_exportGltf`, and `document_renderFrame` or `document_cliRender` to visually verify masks, Point Colors, brushes, Soft Edge, and Bone Dynamics.",
+].join(" ");
+
 const GUIDE_TEXT = [
   "# Moho Studio MCP v3.1.0 Quick Guide",
   `- Active tool profile: \`${ACTIVE_PROFILE}\` (${ACTIVE_TOOLS.length} tools listed; set \`MOHO_STUDIO_TOOLS=full|core|rigging|animation|vector\` or \`--tools <profile>\` to adjust context size).`,
@@ -140,6 +148,7 @@ async function handleMessage(msg) {
           prompts: {},
         },
         serverInfo: SERVER_INFO,
+        instructions: SERVER_INSTRUCTIONS,
       });
       return;
     }
@@ -186,6 +195,11 @@ async function handleMessage(msg) {
           },
         ],
       });
+      return;
+    }
+
+    if (method === "resources/templates/list") {
+      sendResult(id, { resourceTemplates: [] });
       return;
     }
 
@@ -293,6 +307,12 @@ function forceShutdown() {
   ipc.stopKeepAlive();
   process.exit(0);
 }
+
+process.stdout.on("error", (err) => {
+  if (err && err.code === "EPIPE") {
+    forceShutdown();
+  }
+});
 
 rl.on("close", () => {
   stdinClosed = true;
