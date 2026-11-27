@@ -1,4 +1,4 @@
--- Shared Moho Pro 14.4 Lua 5.4 helpers for Moho Studio MCP v3.0.0.
+-- Shared Moho Pro 14.4 Lua 5.4 helpers for Moho Studio MCP v3.1.0.
 -- All constants and methods verified against live Moho Pro 14.4 introspection and official scripts.
 
 local json = require("moho_studio.json")

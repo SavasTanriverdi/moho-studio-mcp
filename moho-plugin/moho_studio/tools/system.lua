@@ -1,4 +1,4 @@
--- System, introspection, and live Lua 5.4 execution tools for Moho Studio MCP v3.0.0.
+-- System, introspection, and live Lua 5.4 execution tools for Moho Studio MCP v3.1.0.
 
 local json = require("moho_studio.json")
 local helpers = require("moho_studio.helpers")
@@ -12,7 +12,7 @@ function system.status(moho, params)
 		local ok, v = pcall(function() return moho:AppVersion() end)
 		if ok and v then appVer = tostring(v) end
 	end
-	local plugVer = (MohoStudioMCP_Server and MohoStudioMCP_Server.Version and MohoStudioMCP_Server:Version()) or "3.0.0"
+	local plugVer = (MohoStudioMCP_Server and MohoStudioMCP_Server.Version and MohoStudioMCP_Server:Version()) or "3.1.0"
 	local info = {
 		connected = true,
 		pluginVersion = plugVer,

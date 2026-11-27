@@ -12,7 +12,7 @@ function MohoStudioMCP_Poller:Name()
 end
 
 function MohoStudioMCP_Poller:Version()
-	return "3.0.0"
+	return "3.1.0"
 end
 
 function MohoStudioMCP_Poller:Description()

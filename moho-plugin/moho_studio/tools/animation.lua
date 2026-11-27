@@ -915,19 +915,19 @@ local function cloneInterpToTable(interp)
 		if ok then t.additiveCycle = v end
 	end
 	if interp.BezierInAngle then
-		local ok, v = pcall(function() return interp:BezierInAngle() end)
+		local ok, v = pcall(function() return interp:BezierInAngle(0) end)
 		if ok then t.bInA = v end
 	end
 	if interp.BezierInPercentage then
-		local ok, v = pcall(function() return interp:BezierInPercentage() end)
+		local ok, v = pcall(function() return interp:BezierInPercentage(0) end)
 		if ok then t.bInP = v end
 	end
 	if interp.BezierOutAngle then
-		local ok, v = pcall(function() return interp:BezierOutAngle() end)
+		local ok, v = pcall(function() return interp:BezierOutAngle(0) end)
 		if ok then t.bOutA = v end
 	end
 	if interp.BezierOutPercentage then
-		local ok, v = pcall(function() return interp:BezierOutPercentage() end)
+		local ok, v = pcall(function() return interp:BezierOutPercentage(0) end)
 		if ok then t.bOutP = v end
 	end
 	return t
@@ -951,10 +951,10 @@ local function applyClonedInterp(ch, frame, t)
 	if t.additiveCycle ~= nil and interp.SetAdditiveCycle then
 		pcall(function() interp:SetAdditiveCycle(t.additiveCycle == true) end)
 	end
-	if t.bInA ~= nil and interp.SetBezierInAngle then pcall(function() interp:SetBezierInAngle(t.bInA) end) end
-	if t.bInP ~= nil and interp.SetBezierInPercentage then pcall(function() interp:SetBezierInPercentage(t.bInP) end) end
-	if t.bOutA ~= nil and interp.SetBezierOutAngle then pcall(function() interp:SetBezierOutAngle(t.bOutA) end) end
-	if t.bOutP ~= nil and interp.SetBezierOutPercentage then pcall(function() interp:SetBezierOutPercentage(t.bOutP) end) end
+	if t.bInA ~= nil and interp.SetBezierInAngle then pcall(function() interp:SetBezierInAngle(0, t.bInA) end) end
+	if t.bInP ~= nil and interp.SetBezierInPercentage then pcall(function() interp:SetBezierInPercentage(0, t.bInP) end) end
+	if t.bOutA ~= nil and interp.SetBezierOutAngle then pcall(function() interp:SetBezierOutAngle(0, t.bOutA) end) end
+	if t.bOutP ~= nil and interp.SetBezierOutPercentage then pcall(function() interp:SetBezierOutPercentage(0, t.bOutP) end) end
 	ch:SetKeyInterpByID(kid, interp)
 end
 

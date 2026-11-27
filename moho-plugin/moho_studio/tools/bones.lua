@@ -1333,4 +1333,961 @@ function bones.freezePose(moho, params)
 	}
 end
 
+local function hasAxisDynamicsEnabled(ch)
+	if ch == nil then return false end
+	if type(ch) == "boolean" then return ch end
+	if ch.GetValue then
+		local ok, v = pcall(function() return ch:GetValue(0) end)
+		return ok and (v == true)
+	end
+	return false
+end
+
+local function isBoneDynamicsActive(b)
+	if not b or not b.fBoneDynamics then
+		return false
+	end
+	if b.fBoneDynamics:GetValue(0) ~= true then
+		return false
+	end
+	return hasAxisDynamicsEnabled(b.fAngleDynamics)
+		or hasAxisDynamicsEnabled(b.fPosDynamics)
+		or hasAxisDynamicsEnabled(b.fScaleDynamics)
+		or hasAxisDynamicsEnabled(b.fWindDynamics)
+end
+
+--- Read-only Moho Pro 14.4 Rig Health Linter covering control bone strength, rigid-group traps,
+--- Animated Layer Order Smart Bone collisions, active action leaks, unbound artwork, and dynamics pre-roll.
+function bones.auditRig(moho, params)
+	params = params or {}
+	local doc = moho.document
+	if not doc then
+		return nil, "No document open"
+	end
+
+	local scopeLayerId = nil
+	if params.layerId ~= nil or params.layerName ~= nil or params.layerUuid ~= nil then
+		local scopeLayer, slid, serr = helpers.resolveLayer(moho, params)
+		if not scopeLayer then
+			return nil, serr
+		end
+		if scopeLayer:LayerType() ~= MOHO.LT_BONE then
+			return nil, "Target layer '" .. scopeLayer:Name() .. "' is not a BoneLayer"
+		end
+		scopeLayerId = slid
+	end
+
+	local checkUnbound = (params.checkUnboundArtwork ~= false)
+	local checkPreRoll = (params.checkDynamicsPreRoll ~= false)
+	local strengthEps = tonumber(params.strengthEpsilon) or 0.001
+
+	local allLayers = {}
+	local childrenByParent = {}
+	helpers.walkLayers(moho, function(layer, lid, parentId, depth)
+		allLayers[lid] = {
+			layer = layer,
+			id = lid,
+			parentId = parentId,
+			depth = depth,
+		}
+		childrenByParent[parentId] = childrenByParent[parentId] or {}
+		childrenByParent[parentId][#childrenByParent[parentId] + 1] = lid
+	end)
+
+	local function collectDescendants(rootId, out)
+		local kids = childrenByParent[rootId]
+		if not kids then return end
+		for i = 1, #kids do
+			local cid = kids[i]
+			out[#out + 1] = cid
+			collectDescendants(cid, out)
+		end
+	end
+
+	local function hasExplicitPointBinding(layer)
+		if layer:LayerType() ~= MOHO.LT_VECTOR then
+			return false
+		end
+		local vl = moho:LayerAsVector(layer)
+		local mesh = vl and vl:Mesh() or nil
+		if not mesh then return false end
+		for pi = 0, mesh:CountPoints() - 1 do
+			local pt = mesh:Point(pi)
+			if pt and pt.fParent ~= nil and pt.fParent >= 0 then
+				return true
+			end
+		end
+		return false
+	end
+
+	local issues = {}
+	local stats = {
+		boneLayers = 0,
+		totalBones = 0,
+		smartBoneActions = 0,
+		bonesWithDynamics = 0,
+		particleLayers = 0,
+	}
+
+	local targetBoneLayerIds = {}
+	if scopeLayerId ~= nil then
+		targetBoneLayerIds[1] = scopeLayerId
+	else
+		for lid = 0, #allLayers do
+			local rec = allLayers[lid]
+			if rec and rec.layer:LayerType() == MOHO.LT_BONE then
+				targetBoneLayerIds[#targetBoneLayerIds + 1] = lid
+			end
+		end
+	end
+
+	-- Count ParticleLayers in scope (or document) for pre-roll check
+	if scopeLayerId ~= nil then
+		local desc = {}
+		collectDescendants(scopeLayerId, desc)
+		for i = 1, #desc do
+			if allLayers[desc[i]].layer:LayerType() == MOHO.LT_PARTICLE then
+				stats.particleLayers = stats.particleLayers + 1
+			end
+		end
+	else
+		for lid = 0, #allLayers do
+			local rec = allLayers[lid]
+			if rec and rec.layer:LayerType() == MOHO.LT_PARTICLE then
+				stats.particleLayers = stats.particleLayers + 1
+			end
+		end
+	end
+
+	for idx = 1, #targetBoneLayerIds do
+		local blId = targetBoneLayerIds[idx]
+		local blLayer = allLayers[blId].layer
+		local bl = moho:LayerAsBone(blLayer)
+		local skel = bl and bl:Skeleton() or nil
+		if bl and skel then
+			stats.boneLayers = stats.boneLayers + 1
+			local boneCount = skel:CountBones()
+			stats.totalBones = stats.totalBones + boneCount
+
+			-- 1. Check active action leak on BoneLayer
+			local curAct = blLayer.CurrentAction and blLayer:CurrentAction() or ""
+			if curAct ~= "" then
+				issues[#issues + 1] = {
+					severity = "warning",
+					code = "active_action_not_mainline",
+					layerId = blId,
+					layerName = blLayer:Name(),
+					actionName = curAct,
+					message = "BoneLayer '" .. blLayer:Name() .. "' is currently editing Action '" .. curAct
+						.. "' instead of Mainline; switch back via action_activate with actionName='' before rigging or animating.",
+				}
+			end
+
+			-- Collect Smart Bone Actions and IK targets on this skeleton
+			local smartActions = {}
+			local smartBoneNames = {}
+			if blLayer.CountActions then
+				for ai = 0, blLayer:CountActions() - 1 do
+					local aname = blLayer:ActionName(ai)
+					if aname ~= "" and blLayer.IsSmartBoneAction and blLayer:IsSmartBoneAction(aname) then
+						smartActions[#smartActions + 1] = aname
+						smartBoneNames[aname] = true
+						local baseName = aname:match("^(.-)%s+2$")
+						if baseName then
+							smartBoneNames[baseName] = true
+						end
+					end
+				end
+			end
+			stats.smartBoneActions = stats.smartBoneActions + #smartActions
+
+			local ikTargets = {}
+			for bi = 0, boneCount - 1 do
+				local b = skel:Bone(bi)
+				if b and b.fTargetBone then
+					local tid = b.fTargetBone:GetValue(0)
+					if tid >= 0 and tid < boneCount then
+						ikTargets[tid] = true
+					end
+				end
+			end
+
+			local strengthBearingBones = 0
+			for bi = 0, boneCount - 1 do
+				local b = skel:Bone(bi)
+				if b then
+					local bName = b:Name()
+					local strength = b.fStrength or 0
+					if strength > strengthEps then
+						strengthBearingBones = strengthBearingBones + 1
+					end
+					if isBoneDynamicsActive(b) then
+						stats.bonesWithDynamics = stats.bonesWithDynamics + 1
+					end
+
+					-- 2. Check non-zero strength on Pin Bones, IK Targets, and Smart Bone dials
+					local roles = {}
+					if (b.fLength or 0) <= 0.0001 then
+						roles[#roles + 1] = "pin_bone"
+					end
+					if ikTargets[bi] then
+						roles[#roles + 1] = "ik_target"
+					end
+					if smartBoneNames[bName] then
+						roles[#roles + 1] = "smart_bone_dial"
+					end
+					if #roles > 0 and strength > strengthEps then
+						issues[#issues + 1] = {
+							severity = "error",
+							code = "control_bone_nonzero_strength",
+							layerId = blId,
+							layerName = blLayer:Name(),
+							boneId = bi,
+							boneName = bName,
+							strength = strength,
+							roles = json.array(roles),
+							message = "Control bone '" .. bName .. "' (" .. table.concat(roles, ", ")
+								.. ") has bone strength " .. string.format("%.3f", strength)
+								.. "; set strength=0 via bone_setProperties so it does not warp nearby artwork.",
+						}
+					end
+					if smartBoneNames[bName] and b.fConstraints ~= true then
+						issues[#issues + 1] = {
+							severity = "info",
+							code = "smart_dial_unconstrained",
+							layerId = blId,
+							layerName = blLayer:Name(),
+							boneId = bi,
+							boneName = bName,
+							message = "Smart Bone dial '" .. bName .. "' has angle constraints disabled; consider enabling constraints matching its authored action angles.",
+						}
+					end
+				end
+			end
+
+			-- Walk descendants of this BoneLayer
+			local descendants = {}
+			collectDescendants(blId, descendants)
+			local rigidTrappedAncestor = {}
+
+			-- Include the BoneLayer itself for Animated Layer Order collision check
+			local groupCandidates = { blId }
+			for i = 1, #descendants do
+				groupCandidates[#groupCandidates + 1] = descendants[i]
+			end
+
+			for i = 1, #groupCandidates do
+				local gid = groupCandidates[i]
+				local glayer = allLayers[gid].layer
+				if glayer:IsGroupType() then
+					local grp = moho:LayerAsGroup(glayer)
+					-- 3. Animated Layer Order collision across >= 2 Smart Bone Actions
+					if grp and grp.GetLayerOrdering and #smartActions >= 2 then
+						local orderCh = grp:GetLayerOrdering()
+						if orderCh and orderCh.ActionByName then
+							local colliding = {}
+							for si = 1, #smartActions do
+								local aname = smartActions[si]
+								local actCh = orderCh:ActionByName(aname)
+								if actCh and actCh.CountKeys and actCh:CountKeys() > 1 then
+									colliding[#colliding + 1] = aname
+								end
+							end
+							if #colliding >= 2 then
+								issues[#issues + 1] = {
+									severity = "warning",
+									code = "animated_layer_order_collision",
+									layerId = gid,
+									layerName = glayer:Name(),
+									boneLayerId = blId,
+									actions = json.array(colliding),
+									message = "Group '" .. glayer:Name() .. "' keyframes Animated Layer Order in "
+										.. tostring(#colliding) .. " Smart Bone Actions (" .. table.concat(colliding, ", ")
+										.. "); Moho layer order overrides do not blend across multiple Smart Bones.",
+								}
+							end
+						end
+					end
+
+					-- 4. Rigid-bound GroupLayer trapping bone-bound descendants
+					if gid ~= blId then
+						local grpParentBone = glayer.LayerParentBone and glayer:LayerParentBone() or -1
+						if grpParentBone >= 0 then
+							local subDesc = {}
+							collectDescendants(gid, subDesc)
+							local trapped = {}
+							for di = 1, #subDesc do
+								local subId = subDesc[di]
+								rigidTrappedAncestor[subId] = gid
+								local subL = allLayers[subId].layer
+								local subPb = subL.LayerParentBone and subL:LayerParentBone() or -1
+								local subFlexi = helpers.getFlexiBoneIds(subL)
+								local hasChildBind = (subPb >= 0) or (#subFlexi > 0) or (subL:LayerType() == MOHO.LT_BONE) or hasExplicitPointBinding(subL)
+								if hasChildBind then
+									trapped[#trapped + 1] = subL:Name()
+								end
+							end
+							if #trapped > 0 then
+								issues[#issues + 1] = {
+									severity = "warning",
+									code = "rigid_group_traps_children",
+									layerId = gid,
+									layerName = glayer:Name(),
+									parentBone = grpParentBone,
+									trappedChildren = json.array(trapped),
+									message = "Group '" .. glayer:Name() .. "' is rigid-bound to boneId " .. tostring(grpParentBone)
+										.. ", which locks " .. tostring(#trapped) .. " bone-bound child layer(s) ("
+										.. table.concat(trapped, ", ") .. ") rigidly to that bone; unbind the group (boneId=-1) and bind children directly.",
+								}
+							end
+						end
+					end
+				end
+			end
+
+			-- 5. Unbound / implicit-flexi artwork directly controlled by this BoneLayer
+			if checkUnbound and boneCount > 0 then
+				for i = 1, #descendants do
+					local cid = descendants[i]
+					local clayer = allLayers[cid].layer
+					local clt = clayer:LayerType()
+					if (clt == MOHO.LT_VECTOR or clt == MOHO.LT_IMAGE) and not rigidTrappedAncestor[cid] then
+						local isEditOnly = clayer.IsEditOnly and (clayer:IsEditOnly() == true) or false
+						local isWarpSelf = false
+						if clt == MOHO.LT_VECTOR then
+							local vl = moho:LayerAsVector(clayer)
+							if vl and vl.IsWarpLayer and vl:IsWarpLayer() then
+								isWarpSelf = true
+							end
+						end
+						local hasWarp = clayer.GetWarpLayer and (clayer:GetWarpLayer() ~= nil) or false
+						local ctrlSkel = clayer.ControllingSkeleton and clayer:ControllingSkeleton() or nil
+						if (not isEditOnly) and (not isWarpSelf) and (not hasWarp) and ctrlSkel == skel then
+							local pb = clayer.LayerParentBone and clayer:LayerParentBone() or -1
+							local flexi = helpers.getFlexiBoneIds(clayer)
+							local ptBound = hasExplicitPointBinding(clayer)
+							if pb < 0 and #flexi == 0 and not ptBound then
+								if strengthBearingBones == 0 then
+									issues[#issues + 1] = {
+										severity = "warning",
+										code = "unbound_artwork_zero_strength_rig",
+										layerId = cid,
+										layerName = clayer:Name(),
+										boneLayerId = blId,
+										boneLayerName = blLayer:Name(),
+										message = "Artwork layer '" .. clayer:Name() .. "' has no rigid, flexi-subset, or point binding and skeleton '"
+											.. blLayer:Name() .. "' has zero strength-bearing bones; bind it via layer_bindToBone or point binding.",
+									}
+								else
+									issues[#issues + 1] = {
+										severity = "info",
+										code = "implicit_global_flexi_bind",
+										layerId = cid,
+										layerName = clayer:Name(),
+										boneLayerId = blId,
+										boneLayerName = blLayer:Name(),
+										message = "Artwork layer '" .. clayer:Name() .. "' uses global Flexi-Bind from all "
+											.. tostring(strengthBearingBones) .. " strength-bearing bone(s); consider explicit flexiBoneIds, rigid boneId, or point binding.",
+									}
+								end
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+
+	-- 6. Pre-roll check for active Bone Dynamics or ParticleLayers
+	if checkPreRoll and (stats.bonesWithDynamics > 0 or stats.particleLayers > 0) then
+		local startFrame = doc:StartFrame()
+		if startFrame <= 1 then
+			issues[#issues + 1] = {
+				severity = "info",
+				code = "dynamics_missing_preroll",
+				startFrame = startFrame,
+				bonesWithDynamics = stats.bonesWithDynamics,
+				particleLayers = stats.particleLayers,
+				message = "Scene has active simulation (" .. tostring(stats.bonesWithDynamics) .. " dynamic bone(s), "
+					.. tostring(stats.particleLayers) .. " particle layer(s)) with startFrame=" .. tostring(startFrame)
+					.. "; add settling pre-roll frames before shot start or render startFrame > 1 so dynamics settle naturally.",
+			}
+		end
+	end
+
+	local errCount, warnCount, infoCount = 0, 0, 0
+	for i = 1, #issues do
+		local sev = issues[i].severity
+		if sev == "error" then errCount = errCount + 1
+		elseif sev == "warning" then warnCount = warnCount + 1
+		else infoCount = infoCount + 1 end
+	end
+
+	return {
+		healthy = (errCount == 0 and warnCount == 0),
+		documentName = doc:Name(),
+		scopeLayerId = scopeLayerId,
+		summary = {
+			errors = errCount,
+			warnings = warnCount,
+			infos = infoCount,
+			boneLayers = stats.boneLayers,
+			totalBones = stats.totalBones,
+			smartBoneActions = stats.smartBoneActions,
+			bonesWithDynamics = stats.bonesWithDynamics,
+			particleLayers = stats.particleLayers,
+		},
+		issues = json.array(issues),
+	}
+end
+
+local function inferControlRole(name)
+	local s = string.lower(tostring(name or ""))
+	if s:find("blink") or s:find("eyelid") or s:find("wink") then return "blink" end
+	if s:find("mouth") or s:find("jaw") or s:find("smile") or s:find("frown") or s:find("lip") or s:find("talk") then return "mouth" end
+	if s:find("brow") then return "eyebrows" end
+	if s:find("eye") or s:find("pupil") or s:find("gaze") or s:find("look") then return "eyes" end
+	if s:find("head") then return "head_turn" end
+	if s:find("body") or s:find("torso") or s:find("turn") then return "body_turn" end
+	if s:find("hand") or s:find("finger") or s:find("fist") or s:find("grip") then return "hand" end
+	if s:find("walk") or s:find("run") or s:find("stride") or s:find("step") then return "walk" end
+	if s:find("arm") or s:find("elbow") or s:find("wrist") or s:find("shoulder") then return "arm" end
+	if s:find("leg") or s:find("foot") or s:find("feet") or s:find("ankle") or s:find("knee") then return "leg" end
+	return "custom"
+end
+
+--- Read-only Puppet Control Surface inspector for any Moho character rig.
+--- Returns Smart Bone Dials (with exact action sweep angles and limits), IK Targets,
+--- Pin Bones, SwitchLayer controls, Vitruvian Bone groups, and Regular Actions.
+function bones.getControls(moho, params)
+	params = params or {}
+	local doc = moho.document
+	if not doc then
+		return nil, "No document open"
+	end
+	local frame = (params.frame ~= nil) and math.floor(tonumber(params.frame)) or moho.frame
+
+	local scopeLayerId = nil
+	if params.layerId ~= nil or params.layerName ~= nil or params.layerUuid ~= nil then
+		local scopeLayer, slid, serr = helpers.resolveLayer(moho, params)
+		if not scopeLayer then
+			return nil, serr
+		end
+		if scopeLayer:LayerType() ~= MOHO.LT_BONE then
+			return nil, "Target layer '" .. scopeLayer:Name() .. "' is not a BoneLayer"
+		end
+		scopeLayerId = slid
+	end
+
+	local allLayers = {}
+	local childrenByParent = {}
+	helpers.walkLayers(moho, function(layer, lid, parentId, depth)
+		allLayers[lid] = { layer = layer, id = lid, parentId = parentId, depth = depth }
+		childrenByParent[parentId] = childrenByParent[parentId] or {}
+		childrenByParent[parentId][#childrenByParent[parentId] + 1] = lid
+	end)
+
+	local function collectDescendants(rootId, out)
+		local kids = childrenByParent[rootId]
+		if not kids then return end
+		for i = 1, #kids do
+			local cid = kids[i]
+			out[#out + 1] = cid
+			collectDescendants(cid, out)
+		end
+	end
+
+	local targetBoneIds = {}
+	if scopeLayerId ~= nil then
+		targetBoneIds[1] = scopeLayerId
+	else
+		for lid = 0, #allLayers do
+			local rec = allLayers[lid]
+			if rec and rec.layer:LayerType() == MOHO.LT_BONE then
+				targetBoneIds[#targetBoneIds + 1] = lid
+			end
+		end
+	end
+
+	local smartBoneDials = {}
+	local ikTargets = {}
+	local pinBones = {}
+	local switchControls = {}
+	local vitruvianGroups = {}
+	local regularActions = {}
+	local seenSwitch = {}
+	local seenActionLayer = {}
+
+	local function recordRegularActions(layer, lid)
+		if seenActionLayer[lid] or not layer.CountActions then return end
+		seenActionLayer[lid] = true
+		for ai = 0, layer:CountActions() - 1 do
+			local aname = layer:ActionName(ai)
+			if aname ~= "" then
+				local isSmart = layer.IsSmartBoneAction and (layer:IsSmartBoneAction(aname) == true) or false
+				if not isSmart then
+					local dur = layer.ActionDuration and layer:ActionDuration(aname) or 0
+					regularActions[#regularActions + 1] = {
+						layerId = lid,
+						layerName = layer:Name(),
+						actionName = aname,
+						duration = dur,
+						inferredRole = inferControlRole(aname),
+					}
+				end
+			end
+		end
+	end
+
+	for idx = 1, #targetBoneIds do
+		local blId = targetBoneIds[idx]
+		local blLayer = allLayers[blId].layer
+		local bl = moho:LayerAsBone(blLayer)
+		local skel = bl and bl:Skeleton() or nil
+		if bl and skel then
+			recordRegularActions(blLayer, blId)
+			local boneCount = skel:CountBones()
+
+			-- Map Smart Bone Action names to their base bone name
+			local smartActionsByBone = {}
+			if blLayer.CountActions then
+				for ai = 0, blLayer:CountActions() - 1 do
+					local aname = blLayer:ActionName(ai)
+					if aname ~= "" and blLayer.IsSmartBoneAction and blLayer:IsSmartBoneAction(aname) then
+						local baseName = aname:match("^(.-)%s+2$") or aname
+						local dir = (aname:match("%s+2$") ~= nil) and "second" or "first"
+						smartActionsByBone[baseName] = smartActionsByBone[baseName] or {}
+						smartActionsByBone[baseName][#smartActionsByBone[baseName] + 1] = {
+							name = aname,
+							direction = dir,
+							duration = blLayer.ActionDuration and blLayer:ActionDuration(aname) or 0,
+						}
+					end
+				end
+			end
+
+			-- Map IK targets -> list of bones targeting them
+			local drivenByTarget = {}
+			for bi = 0, boneCount - 1 do
+				local b = skel:Bone(bi)
+				if b and b.fTargetBone then
+					local tid = b.fTargetBone:GetValue(0)
+					if tid >= 0 and tid < boneCount then
+						drivenByTarget[tid] = drivenByTarget[tid] or {}
+						drivenByTarget[tid][#drivenByTarget[tid] + 1] = {
+							boneId = bi,
+							boneName = b:Name(),
+						}
+					end
+				end
+			end
+
+			for bi = 0, boneCount - 1 do
+				local b = skel:Bone(bi)
+				if b then
+					local bName = b:Name()
+					local restAng = math.deg(b.fAnimAngle:GetValue(0))
+					local curAng = math.deg(b.fAnimAngle:GetValue(frame))
+					local p0 = b.fAnimPos:GetValue(0)
+					local pf = b.fAnimPos:GetValue(frame)
+					local sbActs = smartActionsByBone[bName]
+
+					if sbActs and #sbActs > 0 then
+						local actDetails = {}
+						for ai = 1, #sbActs do
+							local spec = sbActs[ai]
+							local startDeg = restAng
+							local endDeg = restAng
+							local sweepDeg = 0
+							if b.fAnimAngle and b.fAnimAngle.ActionByName then
+								local rawCh = b.fAnimAngle:ActionByName(spec.name)
+								local typedCh = (rawCh and moho.ChannelAsAnimVal) and moho:ChannelAsAnimVal(rawCh) or rawCh
+								if typedCh and typedCh.GetValue and spec.duration > 0 then
+									local okS, vS = pcall(function() return typedCh:GetValue(1) end)
+									local okE, vE = pcall(function() return typedCh:GetValue(spec.duration) end)
+									if okS and okE and type(vS) == "number" and type(vE) == "number" then
+										startDeg = math.deg(vS)
+										endDeg = math.deg(vE)
+										sweepDeg = math.deg(vE - vS)
+									end
+								end
+							end
+							actDetails[#actDetails + 1] = {
+								name = spec.name,
+								direction = spec.direction,
+								duration = spec.duration,
+								startAngleDeg = startDeg,
+								endAngleDeg = endDeg,
+								deltaAngleDeg = sweepDeg,
+								is360 = (math.abs(sweepDeg) >= 359.5),
+							}
+						end
+						smartBoneDials[#smartBoneDials + 1] = {
+							layerId = blId,
+							layerName = blLayer:Name(),
+							boneId = bi,
+							boneName = bName,
+							inferredRole = inferControlRole(bName),
+							restAngleDeg = restAng,
+							currentAngleDeg = curAng,
+							strength = b.fStrength or 0,
+							length = b.fLength or 0,
+							parentBone = b.fParent,
+							constraints = {
+								enabled = (b.fConstraints == true),
+								minDeg = math.deg(b.fMinConstraint or 0),
+								maxDeg = math.deg(b.fMaxConstraint or 0),
+							},
+							bidirectional = (#actDetails >= 2),
+							actions = json.array(actDetails),
+						}
+					end
+
+					if drivenByTarget[bi] then
+						ikTargets[#ikTargets + 1] = {
+							layerId = blId,
+							layerName = blLayer:Name(),
+							boneId = bi,
+							boneName = bName,
+							inferredRole = inferControlRole(bName),
+							parentBone = b.fParent,
+							strength = b.fStrength or 0,
+							restPos = { x = p0.x, y = p0.y },
+							currentPos = { x = pf.x, y = pf.y },
+							drivenBones = json.array(drivenByTarget[bi]),
+						}
+					elseif (b.fLength or 0) <= 0.0001 and not (sbActs and #sbActs > 0) then
+						pinBones[#pinBones + 1] = {
+							layerId = blId,
+							layerName = blLayer:Name(),
+							boneId = bi,
+							boneName = bName,
+							inferredRole = inferControlRole(bName),
+							parentBone = b.fParent,
+							strength = b.fStrength or 0,
+							restPos = { x = p0.x, y = p0.y },
+							currentPos = { x = pf.x, y = pf.y },
+						}
+					end
+				end
+			end
+
+			-- Vitruvian Bone Groups (avoid touching grp.fActiveBone to respect Gotcha #5)
+			if skel.CountGroups and skel.Group then
+				for gi = 0, skel:CountGroups() - 1 do
+					local grp = skel:Group(gi)
+					if grp then
+						local gName = grp.Name and grp:Name() or ("Group " .. tostring(gi + 1))
+						local enabled = (grp.fEnabled ~= false)
+						local activeId = grp.ActiveBone and grp:ActiveBone() or -1
+						local activeName = (activeId >= 0 and activeId < boneCount) and skel:Bone(activeId):Name() or ""
+						local gBones = {}
+						if grp.CountBones and grp.Bone then
+							for gb = 0, grp:CountBones() - 1 do
+								local mb = grp:Bone(gb)
+								if mb then
+									local mbName = mb:Name()
+									local mbId = -1
+									for bi = 0, boneCount - 1 do
+										if skel:Bone(bi) == mb or skel:Bone(bi):Name() == mbName then
+											mbId = bi
+											break
+										end
+									end
+									gBones[#gBones + 1] = { boneId = mbId, boneName = mbName }
+								end
+							end
+						end
+						vitruvianGroups[#vitruvianGroups + 1] = {
+							layerId = blId,
+							layerName = blLayer:Name(),
+							groupIndex = gi,
+							groupName = gName,
+							enabled = enabled,
+							activeBoneId = activeId,
+							activeBoneName = activeName,
+							bones = json.array(gBones),
+						}
+					end
+				end
+			end
+
+			-- Descendant SwitchLayers and child Regular Actions
+			local desc = {}
+			collectDescendants(blId, desc)
+			for i = 1, #desc do
+				local cid = desc[i]
+				local clayer = allLayers[cid].layer
+				recordRegularActions(clayer, cid)
+				if clayer:LayerType() == MOHO.LT_SWITCH and not seenSwitch[cid] then
+					seenSwitch[cid] = true
+					local sw = moho:LayerAsSwitch(clayer)
+					if sw then
+						local kids = {}
+						for ki = sw:CountLayers() - 1, 0, -1 do
+							kids[#kids + 1] = sw:Layer(ki):Name()
+						end
+						local activeVal = ""
+						if sw.GetValue then
+							local okV, v = pcall(function() return sw:GetValue(frame) end)
+							if okV and v ~= nil then
+								activeVal = (type(v) == "userdata" and v.Buffer) and v:Buffer() or tostring(v)
+							end
+						end
+						switchControls[#switchControls + 1] = {
+							layerId = cid,
+							layerName = clayer:Name(),
+							boneLayerId = blId,
+							inferredRole = inferControlRole(clayer:Name()),
+							activeChild = activeVal,
+							frameByFrame = sw.IsFBFLayer and (sw:IsFBFLayer() == true) or false,
+							interpMode = sw.InterpMode and (sw:InterpMode() == true) or false,
+							children = json.array(kids),
+						}
+					end
+				end
+			end
+		end
+	end
+
+	-- When auditing whole document, also include standalone SwitchLayers outside BoneLayers
+	if scopeLayerId == nil then
+		for lid = 0, #allLayers do
+			local rec = allLayers[lid]
+			if rec and rec.layer:LayerType() == MOHO.LT_SWITCH and not seenSwitch[lid] then
+				seenSwitch[lid] = true
+				local sw = moho:LayerAsSwitch(rec.layer)
+				if sw then
+					local kids = {}
+					for ki = sw:CountLayers() - 1, 0, -1 do
+						kids[#kids + 1] = sw:Layer(ki):Name()
+					end
+					local activeVal = ""
+					if sw.GetValue then
+						local okV, v = pcall(function() return sw:GetValue(frame) end)
+						if okV and v ~= nil then
+							activeVal = (type(v) == "userdata" and v.Buffer) and v:Buffer() or tostring(v)
+						end
+					end
+					switchControls[#switchControls + 1] = {
+						layerId = lid,
+						layerName = rec.layer:Name(),
+						boneLayerId = -1,
+						inferredRole = inferControlRole(rec.layer:Name()),
+						activeChild = activeVal,
+						frameByFrame = sw.IsFBFLayer and (sw:IsFBFLayer() == true) or false,
+						interpMode = sw.InterpMode and (sw:InterpMode() == true) or false,
+						children = json.array(kids),
+					}
+				end
+			end
+		end
+	end
+
+	return {
+		documentName = doc:Name(),
+		frame = frame,
+		scopeLayerId = scopeLayerId,
+		summary = {
+			boneLayers = #targetBoneIds,
+			smartBoneDials = #smartBoneDials,
+			ikTargets = #ikTargets,
+			pinBones = #pinBones,
+			switchControls = #switchControls,
+			vitruvianGroups = #vitruvianGroups,
+			regularActions = #regularActions,
+		},
+		smartBoneDials = json.array(smartBoneDials),
+		ikTargets = json.array(ikTargets),
+		pinBones = json.array(pinBones),
+		switchControls = json.array(switchControls),
+		vitruvianGroups = json.array(vitruvianGroups),
+		regularActions = json.array(regularActions),
+	}
+end
+
+--- One-shot Moho Pro studio Smart Bone Dial builder (mirrors Bone > Make Smart Bone Dial):
+--- creates a zero-strength, labeled, color-tagged, IK-ignored dial bone with angle constraints
+--- and its Smart Bone Action(s) (<name>, plus optional <name> 2 for bidirectional controls).
+function bones.createSmartDial(moho, params)
+	params = params or {}
+	local skel, layer, lid, err = resolveSkeleton(moho, params)
+	if not skel then
+		return nil, err
+	end
+	local dialName = tostring(params.name or "")
+	if #dialName == 0 then
+		return nil, "name is required for bone_createSmartDial"
+	end
+
+	local parentId = -1
+	if params.parentBoneId ~= nil or params.parentBoneName ~= nil then
+		local pid, perr = resolveOptionalBoneId(skel, params.parentBoneId, params.parentBoneName)
+		if perr then return nil, perr end
+		if pid ~= nil then parentId = pid end
+	end
+
+	local mode = string.lower(tostring(params.mode or "standard"))
+	local is360 = (mode == "360")
+	local bidirectional = (params.bidirectional == true) and (not is360)
+	local restAngleDeg = (params.restAngleDeg ~= nil) and tonumber(params.restAngleDeg) or 90
+	local length = (params.length ~= nil) and math.max(0.02, tonumber(params.length)) or 0.22
+	local duration = math.max(2, math.floor(tonumber(params.duration) or 96))
+	local colorTag = (params.colorTag ~= nil) and math.floor(tonumber(params.colorTag)) or 1
+	local showLabel = (params.showLabel ~= false)
+	local interpolation = tostring(params.interpolation or "linear")
+
+	local delta1, delta2, minDeg, maxDeg
+	if is360 then
+		delta1 = (params.deltaAngleDeg ~= nil) and tonumber(params.deltaAngleDeg) or ((params.clockwise == true) and -360 or 360)
+		minDeg = nil
+		maxDeg = nil
+	elseif bidirectional then
+		delta1 = (params.deltaAngleDeg ~= nil) and tonumber(params.deltaAngleDeg) or ((params.maxDeg ~= nil) and tonumber(params.maxDeg) or 90)
+		delta2 = (params.secondDeltaAngleDeg ~= nil) and tonumber(params.secondDeltaAngleDeg) or ((params.minDeg ~= nil) and tonumber(params.minDeg) or -90)
+		minDeg = (params.minDeg ~= nil) and tonumber(params.minDeg) or math.min(0, delta1, delta2)
+		maxDeg = (params.maxDeg ~= nil) and tonumber(params.maxDeg) or math.max(0, delta1, delta2)
+	else
+		delta1 = (params.deltaAngleDeg ~= nil) and tonumber(params.deltaAngleDeg) or 90
+		minDeg = (params.minDeg ~= nil) and tonumber(params.minDeg) or math.min(0, delta1)
+		maxDeg = (params.maxDeg ~= nil) and tonumber(params.maxDeg) or math.max(0, delta1)
+	end
+
+	-- Compute dial placement (explicit x/y or auto-laid-out side control column beside character)
+	local px, py
+	if params.x ~= nil or params.y ~= nil then
+		px = tonumber(params.x) or 0
+		py = tonumber(params.y) or 0
+	else
+		local side = string.lower(tostring(params.side or "right"))
+		local minX, maxX, minY, maxY = -0.35, 0.35, -0.35, 0.45
+		local foundExtent = false
+		local bbox = layer.Bounds and layer:Bounds(0) or nil
+		if bbox and bbox.fMin and bbox.fMax and (bbox.fMax.x > bbox.fMin.x or bbox.fMax.y > bbox.fMin.y) then
+			minX, maxX = bbox.fMin.x, bbox.fMax.x
+			minY, maxY = bbox.fMin.y, bbox.fMax.y
+			foundExtent = true
+		end
+		-- Count existing side control dials so new dials stack neatly without overlap
+		local existingDials = 0
+		local baseRightX = maxX + 0.35
+		local baseLeftX = minX - 0.35
+		for bi = 0, skel:CountBones() - 1 do
+			local eb = skel:Bone(bi)
+			if eb and (eb.fStrength or 0) <= 0.001 and eb.fIgnoredByIK == true and eb.IsLabelShowing and eb:IsLabelShowing() then
+				existingDials = existingDials + 1
+			elseif (not foundExtent) and eb then
+				local ep = eb.fAnimPos:GetValue(0)
+				if ep.x > maxX then maxX = ep.x end
+				if ep.x < minX then minX = ep.x end
+				if ep.y > maxY then maxY = ep.y end
+				if ep.y < minY then minY = ep.y end
+			end
+		end
+		local colIdx = math.floor(existingDials / 5)
+		local rowIdx = existingDials % 5
+		if side == "left" then
+			px = (baseLeftX - colIdx * 0.42)
+		else
+			px = (baseRightX + colIdx * 0.42)
+		end
+		py = (maxY - 0.15) - rowIdx * 0.34
+	end
+
+	helpers.prepUndo(moho, layer, true)
+
+	local b = skel:AddBone(0)
+	local bid = skel:CountBones() - 1
+	b:SetName(dialName)
+	b.fParent = parentId
+	b.fAnimParent:SetValue(0, parentId)
+
+	local posVec = LM.Vector2:new_local()
+	posVec:Set(px, py)
+	if parentId >= 0 then
+		local inv = LM.Matrix:new_local()
+		inv:Set(skel:Bone(parentId).fRestMatrix)
+		inv:Invert()
+		inv:Transform(posVec)
+	end
+	b.fAnimPos:SetValue(0, posVec)
+	b.fAnimAngle:SetValue(0, math.rad(restAngleDeg))
+	b.fAnimScale:SetValue(0, 1.0)
+	b.fLength = length
+	b.fStrength = 0
+	b.fIgnoredByIK = true
+	if b.ShowLabel then b:ShowLabel(showLabel) end
+	if b.SetTags then b:SetTags(colorTag) end
+
+	local useConstraints = (params.enableConstraints ~= false) and (not is360)
+	if useConstraints and minDeg ~= nil and maxDeg ~= nil then
+		b.fConstraints = true
+		b.fMinConstraint = math.rad(minDeg)
+		b.fMaxConstraint = math.rad(maxDeg)
+	end
+
+	skel:UpdateBoneMatrix(bid)
+
+	local animTools = require("moho_studio.tools.animation")
+	local leaveActive = string.lower(tostring(params.leaveActive or "none"))
+	local createdActions = {}
+
+	local act1, err1 = animTools.actionCreateSmartBone(moho, {
+		layerId = lid,
+		boneId = bid,
+		mode = is360 and "360" or "standard",
+		direction = "first",
+		duration = duration,
+		deltaAngleDeg = delta1,
+		interpolation = interpolation,
+		addMidpointKey = is360 and (params.addMidpointKey ~= false) or false,
+		mirrorFrame0ToEnd = (params.mirrorFrame0ToEnd ~= nil) and (params.mirrorFrame0ToEnd == true) or is360,
+		leaveActive = (leaveActive == "first" or leaveActive == "true"),
+	})
+	if not act1 then
+		return nil, "Created dial bone '" .. dialName .. "' but failed creating primary Smart Bone Action: " .. tostring(err1)
+	end
+	createdActions[#createdActions + 1] = act1
+
+	if bidirectional then
+		local act2, err2 = animTools.actionCreateSmartBone(moho, {
+			layerId = lid,
+			boneId = bid,
+			mode = "standard",
+			direction = "second",
+			duration = duration,
+			deltaAngleDeg = delta2,
+			interpolation = interpolation,
+			leaveActive = (leaveActive == "second"),
+		})
+		if not act2 then
+			return nil, "Created dial bone '" .. dialName .. "' but failed creating secondary Smart Bone Action: " .. tostring(err2)
+		end
+		createdActions[#createdActions + 1] = act2
+		if leaveActive == "first" then
+			animTools.actionActivate(moho, { layerId = lid, actionName = act1.actionName })
+		end
+	end
+
+	helpers.updateUI(moho)
+	return {
+		created = true,
+		layerId = lid,
+		layerName = layer:Name(),
+		boneId = bid,
+		boneName = dialName,
+		position = { x = px, y = py },
+		restAngleDeg = restAngleDeg,
+		length = length,
+		strength = 0,
+		ignoredByIK = true,
+		showLabel = showLabel,
+		colorTag = colorTag,
+		bidirectional = bidirectional,
+		constraints = useConstraints and { enabled = true, minDeg = minDeg, maxDeg = maxDeg } or { enabled = false },
+		actions = json.array(createdActions),
+		activeAction = layer:CurrentAction(),
+	}
+end
+
 return bones

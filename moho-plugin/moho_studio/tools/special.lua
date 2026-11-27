@@ -459,4 +459,343 @@ function special.fbfManage(moho, params)
 	return nil, "Unsupported fbf_manage operation (use list_timeline, add_blank_frame, duplicate_frame, clone_frame, delete_frame, push_frames): " .. op
 end
 
+local RHUBARB_TO_PRESTON_BLAIR = {
+	A = "MBP",
+	B = "etc",
+	C = "E",
+	D = "AI",
+	E = "O",
+	F = "U",
+	G = "FV",
+	H = "L",
+	X = "rest",
+}
+
+local function trimStr(s)
+	return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+local function parsePapagayoText(rawText)
+	local cues = {}
+	local text = rawText:gsub("\r\n", "\n"):gsub("\r", "\n")
+	for line in text:gmatch("[^\n]+") do
+		local trimmed = trimStr(line)
+		if trimmed ~= "" and trimmed:sub(1, 1) ~= "#" and trimmed ~= "MohoSwitch1" then
+			local fStr, ph = trimmed:match("^(%-?%d+)%s+(.+)$")
+			if fStr and ph then
+				cues[#cues + 1] = {
+					frame = math.floor(tonumber(fStr)),
+					phoneme = trimStr(ph),
+					seq = #cues + 1,
+				}
+			end
+		end
+	end
+	return cues
+end
+
+local function parseRhubarbTable(decoded, fps, frameOffset)
+	local list = nil
+	if type(decoded) == "table" then
+		if type(decoded.mouthCues) == "table" then
+			list = decoded.mouthCues
+		elseif #decoded > 0 and type(decoded[1]) == "table" and (decoded[1].start ~= nil or decoded[1].value ~= nil) then
+			list = decoded
+		end
+	end
+	if not list then
+		return nil, "Rhubarb JSON missing mouthCues array"
+	end
+	local cues = {}
+	for i = 1, #list do
+		local item = list[i]
+		if type(item) == "table" then
+			local ph = item.value or item.phoneme or item.childName
+			if ph ~= nil and tostring(ph) ~= "" then
+				local f
+				if item.frame ~= nil then
+					f = math.floor(tonumber(item.frame)) + frameOffset
+				else
+					local sec = tonumber(item.start or item.timeSec or 0) or 0
+					f = math.floor(sec * fps + 0.5) + frameOffset
+				end
+				cues[#cues + 1] = {
+					frame = f,
+					phoneme = trimStr(ph),
+					seq = #cues + 1,
+				}
+			end
+		end
+	end
+	return cues, nil
+end
+
+--- Import Papagayo (.dat MohoSwitch1), Rhubarb Lip Sync JSON (mouthCues), or explicit cues onto a SwitchLayer.
+function special.switchImportLipSync(moho, params)
+	params = params or {}
+	local layer, id, err = helpers.resolveLayer(moho, params)
+	if not layer then
+		return nil, err
+	end
+	local sw = moho:LayerAsSwitch(layer)
+	if not sw then
+		return nil, "Layer '" .. layer:Name() .. "' is not a SwitchLayer"
+	end
+	local sv = sw:SwitchValues()
+	if not sv then
+		return nil, "SwitchValues channel unavailable on layer '" .. layer:Name() .. "'"
+	end
+
+	local doc = moho.document
+	local fps = tonumber(params.fps) or (doc and doc:Fps()) or 24
+	if fps <= 0 then fps = 24 end
+	local allowFrame0 = (params.allowFrame0 == true)
+	local minFrame = allowFrame0 and 0 or 1
+	local fmtReq = string.lower(tostring(params.format or "auto"))
+	local rawText = nil
+
+	if type(params.filePath) == "string" and #params.filePath > 0 then
+		local f, ferr = io.open(params.filePath, "rb")
+		if not f then
+			return nil, "Cannot open lip-sync file '" .. params.filePath .. "': " .. tostring(ferr)
+		end
+		rawText = f:read("*a")
+		f:close()
+		if rawText:sub(1, 3) == "\239\187\191" then
+			rawText = rawText:sub(4)
+		end
+	elseif type(params.data) == "string" and #params.data > 0 then
+		rawText = params.data
+	end
+
+	local rawCues = nil
+	local detectedFormat = nil
+	local frameOffset = nil
+
+	if type(params.cues) == "table" and #params.cues > 0 then
+		detectedFormat = "cues"
+		local usesTime = false
+		for i = 1, #params.cues do
+			if type(params.cues[i]) == "table" and params.cues[i].frame == nil and (params.cues[i].timeSec ~= nil or params.cues[i].start ~= nil) then
+				usesTime = true
+				break
+			end
+		end
+		frameOffset = params.frameOffset ~= nil and math.floor(tonumber(params.frameOffset)) or (usesTime and 1 or 0)
+		rawCues = {}
+		for i = 1, #params.cues do
+			local c = params.cues[i]
+			if type(c) == "table" then
+				local ph = c.phoneme or c.value or c.childName
+				if ph ~= nil and tostring(ph) ~= "" then
+					local f
+					if c.frame ~= nil then
+						f = math.floor(tonumber(c.frame)) + frameOffset
+					else
+						local sec = tonumber(c.timeSec or c.start or 0) or 0
+						f = math.floor(sec * fps + 0.5) + frameOffset
+					end
+					rawCues[#rawCues + 1] = {
+						frame = f,
+						phoneme = trimStr(ph),
+						seq = #rawCues + 1,
+					}
+				end
+			end
+		end
+	elseif rawText ~= nil then
+		local trimmed = trimStr(rawText)
+		local firstChar = trimmed:sub(1, 1)
+		local wantJson = (fmtReq == "rhubarb_json" or fmtReq == "rhubarb" or fmtReq == "json")
+			or (fmtReq == "auto" and (firstChar == "{" or firstChar == "["))
+		if wantJson then
+			local okDec, decoded = pcall(json.decode, trimmed)
+			if not okDec then
+				return nil, "Failed to decode Rhubarb JSON: " .. tostring(decoded)
+			end
+			frameOffset = params.frameOffset ~= nil and math.floor(tonumber(params.frameOffset)) or 1
+			local parsed, perr = parseRhubarbTable(decoded, fps, frameOffset)
+			if not parsed then
+				return nil, perr
+			end
+			rawCues = parsed
+			detectedFormat = "rhubarb_json"
+		else
+			frameOffset = params.frameOffset ~= nil and math.floor(tonumber(params.frameOffset)) or 0
+			local parsed = parsePapagayoText(rawText)
+			for i = 1, #parsed do
+				parsed[i].frame = parsed[i].frame + frameOffset
+			end
+			rawCues = parsed
+			detectedFormat = "papagayo"
+		end
+	else
+		return nil, "Provide filePath, data, or non-empty cues array"
+	end
+
+	if #rawCues == 0 then
+		return nil, "No valid lip-sync cues parsed from input (format=" .. tostring(detectedFormat) .. ")"
+	end
+
+	-- Index existing SwitchLayer children
+	local childNames = {}
+	local childExact = {}
+	local childLower = {}
+	for i = sw:CountLayers() - 1, 0, -1 do
+		local c = sw:Layer(i)
+		if c then
+			local cn = c:Name()
+			childNames[#childNames + 1] = cn
+			childExact[cn] = cn
+			local lc = string.lower(cn)
+			if childLower[lc] == nil then
+				childLower[lc] = cn
+			end
+		end
+	end
+
+	local preset = string.lower(tostring(params.preset or "none"))
+	local userMap = type(params.phonemeMap) == "table" and params.phonemeMap or nil
+	local caseInsensitive = (params.caseInsensitive ~= false)
+	local dedupeAdjacent = (params.dedupeAdjacent ~= false)
+
+	local function resolveChildName(name)
+		if name == nil or name == "" then
+			return nil
+		end
+		if childExact[name] then
+			return childExact[name]
+		end
+		if caseInsensitive then
+			return childLower[string.lower(name)]
+		end
+		return nil
+	end
+
+	local fallbackResolved = nil
+	if type(params.fallbackChild) == "string" and #params.fallbackChild > 0 then
+		fallbackResolved = resolveChildName(params.fallbackChild)
+		if not fallbackResolved then
+			return nil, "fallbackChild '" .. params.fallbackChild .. "' not found among SwitchLayer children"
+		end
+	end
+
+	table.sort(rawCues, function(a, b)
+		if a.frame == b.frame then
+			return a.seq < b.seq
+		end
+		return a.frame < b.frame
+	end)
+
+	-- Collapse same-frame cues (last wins) and map phonemes to SwitchLayer children
+	local byFrameOrder = {}
+	local byFrameSlot = {}
+	local missingSet = {}
+	local skippedCount = 0
+	for i = 1, #rawCues do
+		local c = rawCues[i]
+		local ph = c.phoneme
+		local mapped = ph
+		if userMap and userMap[ph] ~= nil then
+			mapped = tostring(userMap[ph])
+		elseif userMap and caseInsensitive then
+			for k, v in pairs(userMap) do
+				if string.lower(tostring(k)) == string.lower(ph) then
+					mapped = tostring(v)
+					break
+				end
+			end
+		elseif preset == "rhubarb_to_preston_blair" then
+			local pMapped = RHUBARB_TO_PRESTON_BLAIR[string.upper(ph)]
+			if pMapped then
+				mapped = pMapped
+			end
+		end
+
+		local resolved = resolveChildName(mapped)
+		if not resolved then
+			missingSet[mapped] = true
+			if fallbackResolved then
+				resolved = fallbackResolved
+			end
+		end
+		if resolved then
+			local f = math.max(minFrame, c.frame)
+			if byFrameSlot[f] == nil then
+				byFrameOrder[#byFrameOrder + 1] = f
+			end
+			byFrameSlot[f] = resolved
+		else
+			skippedCount = skippedCount + 1
+		end
+	end
+
+	local missingList = {}
+	for k, _ in pairs(missingSet) do
+		missingList[#missingList + 1] = k
+	end
+	table.sort(missingList)
+
+	local finalKeys = {}
+	local prevChild = nil
+	for i = 1, #byFrameOrder do
+		local f = byFrameOrder[i]
+		local chName = byFrameSlot[f]
+		if (not dedupeAdjacent) or (chName ~= prevChild) then
+			finalKeys[#finalKeys + 1] = { frame = f, childName = chName }
+			prevChild = chName
+		end
+	end
+
+	helpers.prepUndo(moho, layer, true)
+
+	local prevFrame0 = readSwitchValAt(sw, sv, 0)
+	local clearedCount = 0
+	if params.clearExisting == true and sv.CountKeys then
+		local clearFrom = params.clearFromFrame ~= nil and math.floor(tonumber(params.clearFromFrame)) or minFrame
+		clearFrom = math.max(minFrame, clearFrom)
+		local toDelete = {}
+		for i = 0, sv:CountKeys() - 1 do
+			local w = sv:GetKeyWhen(i)
+			if w >= clearFrom then
+				toDelete[#toDelete + 1] = w
+			end
+		end
+		for i = #toDelete, 1, -1 do
+			sv:DeleteKey(toDelete[i])
+			clearedCount = clearedCount + 1
+		end
+	end
+
+	if params.interpMode ~= nil and sw.SetInterpMode then
+		sw:SetInterpMode(params.interpMode == true)
+	end
+
+	for i = 1, #finalKeys do
+		sv:SetValue(finalKeys[i].frame, finalKeys[i].childName)
+	end
+	if (not allowFrame0) and prevFrame0 ~= "" then
+		sv:SetValue(0, prevFrame0)
+	end
+
+	helpers.updateUI(moho)
+
+	return {
+		imported = true,
+		layerId = id,
+		layerName = layer:Name(),
+		sourceFormat = detectedFormat,
+		fps = fps,
+		frameOffset = frameOffset,
+		totalCues = #rawCues,
+		clearedKeys = clearedCount,
+		writtenKeys = #finalKeys,
+		skippedCues = skippedCount,
+		missingChildren = json.array(missingList),
+		children = json.array(childNames),
+		interpMode = sw.InterpMode and (sw:InterpMode() == true) or false,
+		timeline = json.array(finalKeys),
+	}
+end
+
 return special

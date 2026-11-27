@@ -18,20 +18,20 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
       - name: Run hygiene, Lua balance, and 1:1 RPC parity checks
         run: python scripts/check_hygiene.py
 
-      - name: Run MCP protocol and concurrent mock IPC tests
+      - name: Run MCP protocol, CLI, platform, and mock IPC tests
         run: npm test

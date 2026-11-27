@@ -1,8 +1,8 @@
 {
   "name": "moho-studio-mcp",
   "mcpName": "io.github.SavasTanriverdi/moho-studio-mcp",
-  "version": "3.0.0",
-  "description": "Zero-dependency MCP server and Moho Pro 14.4 Lua 5.4 plugin for live 2D animation authoring, rigging, Smart Warp, Styles, glTF 2.0 export, and headless CLI rendering",
+  "version": "3.1.0",
+  "description": "Zero-dependency MCP server and Moho Pro 14.4 Lua 5.4 plugin for live 2D animation authoring, rigging, lip-sync, Smart Warp, Styles, glTF 2.0 export, and headless CLI rendering",
   "type": "module",
   "main": "src/server.mjs",
   "bin": {
@@ -41,6 +41,7 @@
     "model-context-protocol",
     "2d-animation",
     "rigging",
+    "lipsync",
     "smart-warp",
     "lua",
     "gltf",
@@ -50,7 +51,7 @@
   ],
   "scripts": {
     "start": "node src/server.mjs",
-    "test": "node tests/test_mcp_protocol.mjs && node tests/test_ipc_mock.mjs"
+    "test": "node tests/test_mcp_protocol.mjs && node tests/test_ipc_mock.mjs && node tests/test_cli_and_platform.mjs"
   },
   "license": "MIT"
 }

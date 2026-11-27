@@ -3,7 +3,7 @@
 
 export const PLAYBOOK_TEXT = `# Moho Pro 14.4 Authoring Playbook (moho-studio://playbook)
 
-15 practical rules for rigging, vector shading, animation, and glTF export in Moho Pro 14.4, plus live-verified Lua runtime invariants.
+16 practical rules for rigging, character performance, vector shading, animation, and glTF export in Moho Pro 14.4, plus live-verified Lua runtime invariants.
 
 ## 1. Zero-Strength Dials, Targets and Hierarchy Isolation
 - Create control dials, IK targets, and Pin Bones with \`strength: 0\` (for Pin Bones set \`pinBone: true\` or \`length: 0\`) so they never deform nearby artwork.
@@ -67,4 +67,13 @@ export const PLAYBOOK_TEXT = `# Moho Pro 14.4 Authoring Playbook (moho-studio://
 ## 15. Visual Verification and Moho 14.4 Lua Safety Notes
 - Do not rely on \`document_captureWindow\` alone to check Masks, Layer Outlines, Point Colors, Merged-Alpha brushes, Soft Edge, or mid-timeline Bone Dynamics; render and inspect with \`document_renderFrame\` or \`document_cliRender\`.
 - In custom \`lua_execute\` scripts: read/write \`M_Style\` names only via \`style:Name()\` / \`style:SetName(name)\` (never access \`style.fName\`, which corrupts \`tolua_ubox\` into \`LM_String\`), pass \`LM.String\` userdata (never a Lua string) to \`LayerComp:SetName(lmStr)\`, cast \`AnimChannel:ActionByName(name)\` with \`moho:ChannelAsAnimVal\` / \`ChannelAsAnimVec3\`, pass component index \`0/1/2\` as arg #1 to \`InterpSetting\` Bezier methods, and use \`document_close(force=true)\` to close dirty disposable documents without blocking on a Save prompt.
+
+## 16. Control-First Studio Rigging and Character Performance
+- Before animating ANY existing Moho character rig, call \`rig_getControls\` first. Drive performances through the rig's existing Smart Bone Dials (\`body\`, \`head\`, \`blink\`, \`mouth\`, \`brows\`, \`hands\`), Foot/Hand IK Targets, SwitchLayers, Vitruvian Bone groups, and Regular Actions instead of dragging raw vector vertices or overriding bound layers on Mainline.
+- When building a new studio character rig, place animator-ready Smart Bone Dials beside the character using \`bone_createSmartDial\` (\`Blink\`, \`Mouth Open\`, \`Head Turn\`, \`Body Turn\`, \`Eyebrows\`) with \`strength: 0\`, \`ignoredByIK: true\`, \`showLabel: true\`, explicit angle limits, and \`duration: 96\` linear actions, plus unparented Foot IK Targets (\`fixedAngle: true\` on foot bones).
+- Standard studio motion patterns:
+  - Eye blinks: 2 frames close, 1 to 2 frames held shut, 3 to 4 frames ease-out open on the \`Blink\` Smart Bone Dial (pair with a subtle brow dip).
+  - Mouth and speech: keyframe a \`Mouth\` SwitchLayer with \`switch_importLipSync\` (Papagayo or Rhubarb) or drive \`Mouth Open\` / \`Mouth Mood\` Smart Bone Dials 1 to 2 frames ahead of audio beats.
+  - Walk cycles: build a 24-frame loop (12 frames per step) on Foot IK Targets (Contact -> Down -> Passing -> Up -> Contact) with vertical root bob, opposite arm swing, 2 to 4 frame wrist/hand follow-through, and \`animation_createCycle\` looping back to \`startFrame + 1\`.
+  - Arm and body gestures: move in curved arcs leading from chest/shoulder to elbow to wrist, and use \`animation_tween\` for breakdowns, anticipation (\`weight < 0\`), and overshoot (\`weight > 1\`).
 `;

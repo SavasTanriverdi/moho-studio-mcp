@@ -1,4 +1,4 @@
--- Atomic, collision-free IPC server for Moho Studio MCP v3.0.0 using Moho's native BeginFileListing.
+-- Atomic, collision-free IPC server for Moho Studio MCP v3.1.0 using Moho's native BeginFileListing.
 
 local server = {}
 
@@ -12,7 +12,7 @@ local startedAt = ""
 local requestCount = 0
 
 local SEP = package.config:sub(1, 1)
-local VERSION = "3.0.0"
+local VERSION = "3.1.0"
 
 local DOC_LIFECYCLE_METHODS = {
 	["document.new"] = true,

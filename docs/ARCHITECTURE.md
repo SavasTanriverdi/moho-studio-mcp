@@ -4,17 +4,22 @@
 
 ```text
 MCP Client (Claude Desktop / Cursor / VS Code / Codex / Antigravity)
-   |  stdio (JSON-RPC 2.0, newline-delimited MCP 2024-11-05)
+   |  stdio (JSON-RPC 2.0, newline-delimited MCP 2025-03-26 / 2024-11-05)
    v
-src/server.mjs  (Node.js 20+ ESM, zero npm deps)
-   |-- MCP Resources:
-   |     moho-studio://guide     tool selector and workflow notes
-   |     moho-studio://playbook  15 Moho Pro 14.4 authoring rules
+src/server.mjs  (Node.js 20+ ESM, zero npm deps; also dispatches install/doctor CLI)
+   |-- Tool Profiles: MOHO_STUDIO_TOOLS=full|core|rigging|animation|vector
+   |-- MCP Resources (2):
+   |     moho-studio://guide     active profile, tool index, and workflow notes
+   |     moho-studio://playbook  16 Moho Pro 14.4 authoring and performance rules
+   |-- MCP Prompts (7):
+   |     animate_character_performance, build_smart_bone_controls, rig_character,
+   |     create_360_turnaround, painterly_vector_shading, prepare_gltf_export,
+   |     import_lipsync_animation
    |
-   |-- Windows Host Native Tools (3):
-   |     moho_activatePoller     PrintWindow icon match + background PostMessage click
-   |     document_captureWindow  Win32 EnumWindows largest visible Moho window PNG
-   |     document_cliRender      Moho.exe -r headless GPU batch renderer
+   |-- Host Native Tools (3):
+   |     moho_activatePoller     Win32 PrintWindow icon match + PostMessage click
+   |     document_captureWindow  Win32 EnumWindows/PrintWindow (macOS screencapture)
+   |     document_cliRender      Moho -r headless GPU batch renderer (Windows + macOS)
    |
    |-- Atomic File IPC in %TEMP%\moho-studio-mcp\ (or MOHO_STUDIO_IPC_DIR):
    |     req_<pid>_<seq>_<hex>.json  ->  resp_<pid>_<seq>_<hex>.json
@@ -42,7 +47,7 @@ To avoid that failure mode:
    - `document.close`
    - `document.exportGltf`
    Any `batch.execute` request containing one of those methods is also deferred until `"command"` dispatch.
-3. For normal RPCs, `src/ipc.mjs` nudges Moho's main window with Win32 `RedrawWindow` / `WM_MOUSEMOVE`. If a request stalls past `1.1s` (or immediately at `50ms` for `DOC_LIFECYCLE_METHODS`), `src/ipc.mjs` runs `activatePoller()`. That helper captures the window via `PrintWindow`, locates the Poller tool's unique teal-star icon, and sends background `PostMessage(WM_LBUTTONDOWN/UP)` clicks to select the Poller (if inactive) and press its `"MCP Sync"` `LM.GUI.Button`. That executes `HandleMessage(MSG_POLL)` on Moho's normal button-command stack without moving the cursor or taking focus.
+3. On Windows, for normal RPCs `src/ipc.mjs` nudges Moho's main window with Win32 `RedrawWindow` / `WM_MOUSEMOVE`. If a request stalls past `450ms` (or immediately at `50ms` for `DOC_LIFECYCLE_METHODS`), `src/ipc.mjs` runs `activatePoller()`. That helper captures the window via `PrintWindow`, locates the Poller tool's unique teal-star icon, and sends background `PostMessage(WM_LBUTTONDOWN/UP)` clicks to select the Poller (if inactive) and press its `"MCP Sync"` `LM.GUI.Button`. That executes `HandleMessage(MSG_POLL)` on Moho's normal button-command stack without moving the cursor or taking focus.
 
 ## IPC Lifecycle
 
@@ -51,22 +56,22 @@ To avoid that failure mode:
 3. `server.poll(moho, source)` lists `ipcDir` using `moho:BeginFileListing(ipcDir)`, claims up to 8 eligible `req_*.json` files per tick, deletes each request file before running the handler inside `pcall`, and atomically writes `resp_<id>.json`.
 4. `src/ipc.mjs` checks for `resp_<id>.json` every `35ms`, deletes it after reading, and returns JSON text (plus inline base64 PNG image content for `document_renderFrame`, `layer_renderImage`, `document_captureWindow`, and `document_cliRender`).
 
-## Tool Groups (78 Total)
+## Tool Groups (82 Total)
 
 | Domain | Tools | Notes |
 | :--- | :---: | :--- |
 | System and Live Lua | 4 | `moho_status`, `moho_activatePoller` (host), `moho_apiInspect`, `lua_execute` |
-| Document, Render, glTF and Layer Comps | 18 | Includes host `document_captureWindow` and `document_cliRender`, plus headless `SS_SVGImport` and `SS_glTFExport` wrappers |
-| Layers, Masking, Switch, FBF and Particles | 20 | Layer tree, binding, masking, animated layer order, type conversion, follow path, reference sync, FBF, particles |
-| Bones, Vitruvian, Wind and 2D Physics | 13 | Geometry-snapped bones, pin bones, constraints, 3-axis dynamics, mirroring, freeze pose, Vitruvian groups, wind, physics |
+| Document, Render, glTF, Audit and Layer Comps | 20 | Includes host `document_captureWindow` and `document_cliRender`, headless `SS_SVGImport` and `SS_glTFExport` wrappers, `rig_auditGltf`, `rig_audit`, and `rig_getControls` |
+| Layers, Masking, Switch, Lip-Sync, FBF and Particles | 21 | Layer tree, binding, masking, animated layer order, type conversion, follow path, reference sync, `switch_importLipSync`, FBF, particles |
+| Bones, Smart Dials, Vitruvian, Wind and 2D Physics | 14 | Geometry-snapped bones, pin bones, `bone_createSmartDial`, constraints, 3-axis dynamics, mirroring, freeze pose, Vitruvian groups, wind, physics |
 | Animation, Actions, Markers and Camera | 13 | 48 channels, Separate Dimensions, Bezier handles, range cycles, retiming, tweening, markers, 360 Smart Bones, camera |
 | Vector, Smart Warp, Curver, Liquid Shapes and Styles | 9 | Shape/point/topology editing, Delaunay/Quad/Curver warps, curve profile, Liquid Shapes, Saved Styles and Brushes |
 | Batch | 1 | `batch_execute` |
 
-## Undo, Coalescing and Installer Backups
+## Undo, Coalescing, CLI Installer and Backups
 
 Every mutating Lua handler calls `helpers.prepUndo(moho, layer, multi)` before writing and `helpers.updateUI(moho)` after. Inside `batch_execute`, `helpers.batchDepth` suppresses per-operation undo snapshots and intermediate redraws so the whole batch lands as a single Undo step with one `UpdateUI()` pass.
 
-`scripts/install.py` defaults to dry-run mode. When run with `--apply`, it writes `.moho_studio_backup_<YYYYMMDD_HHMMSS>` beside any modified client config or `_tool_list.txt` file and verifies readback parity afterward.
+Both `src/cli.mjs` (`npx moho-studio-mcp install`) and `scripts/install.py` default to dry-run mode. When run with `--apply`, they write `.moho_studio_backup_<YYYYMMDD_HHMMSS>` beside any modified client config or `_tool_list.txt` file and verify copied Lua and icon files byte-for-byte afterward. `npx moho-studio-mcp doctor` checks Node runtime, Moho executable path, installed plugin SHA-256 parity, and live IPC `status.json` version alignment.
 
 Moho Pro 14.4 Lua 5.4 API signatures and engine edge cases are documented in [MOHO_14_4_LUA_API_VERIFIED.md](MOHO_14_4_LUA_API_VERIFIED.md).

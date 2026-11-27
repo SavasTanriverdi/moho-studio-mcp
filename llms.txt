@@ -1,33 +1,34 @@
 # Moho Studio MCP
 
-> Zero-dependency Node.js stdio MCP server and Moho Pro 14.4 Lua 5.4 plugin for live 2D animation authoring, rigging, Smart Warp, Curvers, Liquid Shapes, Saved Styles, Layer Comps, glTF 2.0 export, and headless CLI rendering on Windows.
+> Zero-dependency Node.js stdio MCP server and Moho Pro 14.4 Lua 5.4 plugin for live 2D animation authoring, rigging, lip-sync, Smart Warp, Curvers, Liquid Shapes, Saved Styles, Layer Comps, glTF 2.0 export, and headless CLI rendering.
 
-Moho Studio MCP exposes 78 MCP tools (75 live Lua RPCs plus 3 Windows host tools) and 2 MCP resources (`moho-studio://guide` and `moho-studio://playbook`) over JSON-RPC 2.0 stdio (`2024-11-05`). It requires Windows 10/11 x64, Moho Pro 14.4, and Node.js 20+.
+Moho Studio MCP exposes 82 annotated MCP tools (79 live Lua RPCs plus 3 host tools), 2 MCP resources (`moho-studio://guide` and `moho-studio://playbook`), and 7 MCP prompts over JSON-RPC 2.0 stdio (`2025-03-26` and `2024-11-05`). It supports optional tool profiles via `MOHO_STUDIO_TOOLS` (`full`, `core`, `rigging`, `animation`, `vector`). It is live-verified on Windows 10/11 x64 with Moho Pro 14.4 and Node.js 20+, with experimental macOS host support.
 
 ## Docs
 
-- [README.md](README.md): Requirements, installation, client configuration (Claude Desktop, Cursor, VS Code, Codex, Antigravity), tool table, and security notes.
+- [README.md](README.md): Quick start (`npx moho-studio-mcp install` and `doctor`), tool profiles, client configuration (Claude Desktop, Cursor, VS Code, Codex, Antigravity), tool table, and security notes.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): Process topology, atomic file IPC, crash-safe dispatch (`DrawMe` vs `HandleMessage`), and undo coalescing.
 - [docs/MOHO_14_4_LUA_API_VERIFIED.md](docs/MOHO_14_4_LUA_API_VERIFIED.md): Verified Moho Pro 14.4 Lua 5.4 signatures, constants, CLI renderer flags, and runtime gotchas.
 - [AGENTS.md](AGENTS.md): Contributor and coding-agent rules, Moho Lua safety invariants, and verification commands.
 
 ## Entry Points
 
-- [src/server.mjs](src/server.mjs): Stdio MCP server entrypoint (`node src/server.mjs`).
+- [src/server.mjs](src/server.mjs): Stdio MCP server and CLI entrypoint (`npx -y moho-studio-mcp`).
+- [src/cli.mjs](src/cli.mjs): Pure Node.js dry-run-first plugin/client installer and `doctor` diagnostics (`npx moho-studio-mcp install`, `npx moho-studio-mcp doctor`).
+- [src/prompts.mjs](src/prompts.mjs): Seven built-in MCP prompts (`animate_character_performance`, `build_smart_bone_controls`, `rig_character`, `create_360_turnaround`, `painterly_vector_shading`, `prepare_gltf_export`, `import_lipsync_animation`).
 - [server.json](server.json): MCP Registry manifest (`io.github.SavasTanriverdi/moho-studio-mcp`).
-- [src/tools.mjs](src/tools.mjs): JSON Schema definitions for all 78 MCP tools.
-- [src/playbook.mjs](src/playbook.mjs): Text of the `moho-studio://playbook` MCP resource (15 Moho Pro 14.4 rules).
-- [src/ipc.mjs](src/ipc.mjs): Atomic temp-and-rename IPC client, Win32 `PrintWindow`/`PostMessage` helpers, and headless `Moho.exe -r` CLI render runner.
-- [moho-plugin/MohoStudioMCP_Server.lua](moho-plugin/MohoStudioMCP_Server.lua): Moho Pro 14.4 Menu script registering all 75 live Lua RPC handlers.
+- [src/tools.mjs](src/tools.mjs): JSON Schema definitions, MCP tool annotations, and tool profile filters for all 82 MCP tools.
+- [src/playbook.mjs](src/playbook.mjs): Text of the `moho-studio://playbook` MCP resource (16 Moho Pro 14.4 rules).
+- [src/ipc.mjs](src/ipc.mjs): Atomic temp-and-rename IPC client, Win32 `PrintWindow`/`PostMessage` helpers, macOS `screencapture`/binary discovery, and headless `Moho -r` CLI render runner.
+- [moho-plugin/MohoStudioMCP_Server.lua](moho-plugin/MohoStudioMCP_Server.lua): Moho Pro 14.4 Menu script registering all 79 live Lua RPC handlers.
 - [moho-plugin/MohoStudioMCP_Poller.lua](moho-plugin/MohoStudioMCP_Poller.lua): Neutral Poller tool with the `"MCP Sync"` button for `HandleMessage(MSG_POLL)` dispatch.
-- [scripts/install.py](scripts/install.py): Dry-run-first installer for Moho plugin files and Codex/Antigravity client configs.
 - [scripts/check_hygiene.py](scripts/check_hygiene.py): Offline checker for UTF-8/ASCII hygiene, `node --check`, Lua syntax balance, and 1:1 Node-to-Lua RPC parity.
 
 ## Quick Setup
 
-1. Install plugin: `python scripts/install.py --scope moho-plugin --apply` (Administrator PowerShell for Program Files, or pass `--moho-scripts-dir` for a Moho Custom Content Folder).
+1. Install plugin: `npx moho-studio-mcp install --apply` (Administrator PowerShell for Program Files, or pass `--moho-scripts-dir` for a Moho Custom Content Folder).
 2. In Moho Pro 14.4: reload scripts (`Ctrl+Shift+Alt+L`) and click `Scripts > MohoStudioMCP > Start/Stop MohoStudioMCP Server`.
-3. Configure your MCP client to run `node /path/to/moho-studio-mcp/src/server.mjs`.
+3. Configure your MCP client to run `npx -y moho-studio-mcp` (or check setup with `npx moho-studio-mcp doctor`).
 4. Call `moho_status` and read `moho-studio://playbook` before editing a live document.
 
 ## Verification

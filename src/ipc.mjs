@@ -20,6 +20,47 @@ export function escapePsSingleQuoted(value) {
   return String(value).replace(/'/g, "''");
 }
 
+export function resolveMohoExecutable({
+  platform = process.platform,
+  env = process.env,
+  existsSync = fs.existsSync,
+} = {}) {
+  const override = env && env.MOHO_EXE_PATH ? String(env.MOHO_EXE_PATH).trim() : "";
+  if (override) {
+    return {
+      path: override,
+      exists: existsSync(override),
+      source: "MOHO_EXE_PATH",
+      candidates: [override],
+    };
+  }
+  let candidates = [];
+  if (platform === "win32") {
+    candidates = [
+      "C:\\Program Files\\Moho 14\\Moho.exe",
+      "C:\\Program Files\\Moho\\Moho.exe",
+    ];
+  } else if (platform === "darwin") {
+    candidates = [
+      "/Applications/Moho.app/Contents/MacOS/Moho",
+      "/Applications/Moho Pro 14.app/Contents/MacOS/Moho",
+      "/Applications/Moho 14.app/Contents/MacOS/Moho",
+    ];
+  } else {
+    candidates = ["moho"];
+  }
+  for (const cand of candidates) {
+    if (existsSync(cand)) {
+      return { path: cand, exists: true, source: "auto", candidates };
+    }
+  }
+  return { path: candidates[0], exists: false, source: "default", candidates };
+}
+
+export function buildMacCaptureArgs(windowId, targetPath) {
+  return ["-l", String(windowId), "-x", "-o", targetPath];
+}
+
 function buildKeepAlivePs(ipcDir) {
   const escapedDir = escapePsSingleQuoted(ipcDir);
   return `
@@ -327,12 +368,48 @@ export class MohoIpcClient {
   }
 
   async captureWindow(outputPath) {
-    if (process.platform !== "win32") {
-      throw new Error("document_captureWindow is currently implemented for Windows");
-    }
     this.ensureIpcDir();
     const targetPath = path.resolve(outputPath || path.join(this.ipcDir, `window_${process.pid}_${Date.now()}.png`));
     fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+
+    if (process.platform === "darwin") {
+      const osa = 'tell application "System Events" to get id of first window of (first process whose name contains "Moho")';
+      const winIdRaw = await new Promise((resolve, reject) => {
+        execFile("osascript", ["-e", osa], { timeout: 10_000 }, (err, stdout, stderr) => {
+          if (err) {
+            reject(
+              new Error(
+                `macOS Moho window lookup failed (ensure Moho is visible and Accessibility permission is granted): ${(stderr || err.message).trim()}`
+              )
+            );
+          } else {
+            resolve(stdout.trim());
+          }
+        });
+      });
+      const winId = Number(winIdRaw);
+      if (!Number.isFinite(winId) || winId <= 0) {
+        throw new Error(`Could not resolve macOS CGWindowID for Moho (got '${winIdRaw}')`);
+      }
+      await new Promise((resolve, reject) => {
+        execFile("/usr/sbin/screencapture", buildMacCaptureArgs(winId, targetPath), { timeout: 15_000 }, (err, _stdout, stderr) => {
+          if (err) {
+            reject(
+              new Error(
+                `macOS screencapture failed (check Screen Recording permission): ${(stderr || err.message).trim()}`
+              )
+            );
+          } else {
+            resolve();
+          }
+        });
+      });
+      return { outputPath: targetPath, width: 0, height: 0, windowTitle: "Moho (macOS)", windowId: winId };
+    }
+
+    if (process.platform !== "win32") {
+      throw new Error(`document_captureWindow is supported on Windows and macOS (current platform: ${process.platform})`);
+    }
     const psScript = buildCaptureWindowPs(targetPath);
     const infoLine = await new Promise((resolve, reject) => {
       execFile(
@@ -356,8 +433,15 @@ export class MohoIpcClient {
   }
 
   async activatePoller() {
+    if (process.platform === "darwin") {
+      return {
+        activated: false,
+        platform: "darwin",
+        reason: "Background Win32 poller activation is Windows-only; on macOS keep MohoStudioMCP Poller active or click MCP Sync in Moho's tool bar.",
+      };
+    }
     if (process.platform !== "win32") {
-      return { activated: false, reason: "moho_activatePoller is currently implemented for Windows" };
+      return { activated: false, platform: process.platform, reason: "moho_activatePoller is implemented for Windows" };
     }
     const psScript = `
 Add-Type -AssemblyName System.Drawing
@@ -624,10 +708,13 @@ Write-Output ($outObj | ConvertTo-Json -Compress)
     if (!fs.existsSync(projectPath)) {
       throw new Error(`Project file does not exist: ${projectPath}`);
     }
-    const mohoExe = process.env.MOHO_EXE_PATH || "C:\\Program Files\\Moho 14\\Moho.exe";
-    if (!fs.existsSync(mohoExe)) {
-      throw new Error(`Moho executable not found at ${mohoExe} (override with MOHO_EXE_PATH)`);
+    const exeInfo = resolveMohoExecutable();
+    if (!exeInfo.exists) {
+      throw new Error(
+        `Moho executable not found at ${exeInfo.path} (checked: ${exeInfo.candidates.join(", ")}; override with MOHO_EXE_PATH)`
+      );
     }
+    const mohoExe = exeInfo.path;
 
     const outputDir = params.outputDir
       ? path.resolve(params.outputDir)

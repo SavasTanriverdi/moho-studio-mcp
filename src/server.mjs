@@ -1,21 +1,57 @@
 #!/usr/bin/env node
-// Zero-dependency Node.js 20+ stdio MCP server for Moho Studio MCP v3.0.0.
+// Zero-dependency Node.js 20+ stdio MCP server and setup CLI for Moho Studio MCP v3.1.0.
 
 import fs from "node:fs";
 import readline from "node:readline";
-import { PROTOCOL_VERSION, SERVER_INFO, TIMEOUTS } from "./config.mjs";
+import {
+  negotiateProtocolVersion,
+  resolveToolProfile,
+  SERVER_INFO,
+  TIMEOUTS,
+} from "./config.mjs";
 import { MohoIpcClient } from "./ipc.mjs";
-import { TOOLS, TOOL_BY_NAME } from "./tools.mjs";
+import { getToolsForProfile, TOOL_BY_NAME } from "./tools.mjs";
 import { PLAYBOOK_TEXT } from "./playbook.mjs";
+import { PROMPTS, PROMPT_BY_NAME } from "./prompts.mjs";
 
+const CLI_SUBCOMMANDS = new Set(["install", "doctor", "--help", "-h", "--version", "-v", "help"]);
+
+function parseServerArgs(argv) {
+  let profileArg = null;
+  for (let i = 0; i < argv.length; i += 1) {
+    const tok = argv[i];
+    if (tok === "--tools" && i + 1 < argv.length) {
+      profileArg = argv[i + 1];
+      i += 1;
+    } else if (tok.startsWith("--tools=")) {
+      profileArg = tok.slice("--tools=".length);
+    }
+  }
+  return { profile: resolveToolProfile(profileArg) };
+}
+
+const rawArgs = process.argv.slice(2);
+if (rawArgs.length > 0 && CLI_SUBCOMMANDS.has(rawArgs[0])) {
+  const { runCli } = await import("./cli.mjs");
+  const exitCode = await runCli(rawArgs);
+  process.exit(exitCode);
+}
+
+const { profile: ACTIVE_PROFILE } = parseServerArgs(rawArgs);
+const ACTIVE_TOOLS = getToolsForProfile(ACTIVE_PROFILE);
 const ipc = new MohoIpcClient();
 
 const GUIDE_TEXT = [
-  "# Moho Studio MCP v3.0.0 Quick Guide",
-  "- Read `moho-studio://playbook` first for 15 Moho Pro 14.4 rigging, shading, animation, glTF, and Lua safety rules.",
+  "# Moho Studio MCP v3.1.0 Quick Guide",
+  `- Active tool profile: \`${ACTIVE_PROFILE}\` (${ACTIVE_TOOLS.length} tools listed; set \`MOHO_STUDIO_TOOLS=full|core|rigging|animation|vector\` or \`--tools <profile>\` to adjust context size).`,
+  "- Read `moho-studio://playbook` first for 16 Moho Pro 14.4 rigging, character performance, shading, animation, glTF, and Lua safety rules.",
   "- Start every live session with `moho_status` to confirm Moho Pro 14.4 connectivity.",
+  "- Before animating any character rig, call `rig_getControls` to discover its Smart Bone Dials (with exact angle sweeps), IK Targets, Pin Bones, SwitchLayers, Vitruvian groups, and Regular Actions.",
+  "- When building studio character controls (Blink, Mouth, Head Turn, Body Turn, Eyebrows), use `bone_createSmartDial` to create labeled, zero-strength, constrained side dials with 96-frame Smart Bone Actions in one call.",
   "- Use `moho_apiInspect` (includes tolua++ `.get`/`.set` properties) before writing custom `lua_execute` scripts.",
   "- Use `batch_execute` for multi-bone, multi-layer, or multi-keyframe edits (single Undo step + coalesced UI refresh).",
+  "- Use `rig_audit` to lint rigs for non-zero control-bone strength, rigid-group traps, Smart Bone layer-order collisions, active-action leaks, unbound artwork, and dynamics pre-roll.",
+  "- Use `switch_importLipSync` to import Papagayo `.dat` (`MohoSwitch1`), Rhubarb Lip Sync JSON (`mouthCues`), or explicit cues onto any SwitchLayer.",
   "- Use `document_renderFrame` for live visual checks (do not trust viewport captures alone for masks, Point Colors, Merged-Alpha brushes, or Bone Dynamics), `layer_renderImage` for isolated transparent PNGs, `document_cliRender` for headless GPU batch renders, and `rig_auditGltf` + `document_exportGltf` for headless glTF 2.0 / GLB exports.",
   "- Use `mesh_createSmartWarp` (`warp`, `quad`, `curver` + `compressible` + multi-curve), `mesh_editShape`, `mesh_editPoints`, `mesh_editTopology`, `mesh_setCurveProfile`, `mesh_liquidShapes`, and `style_manage` (Saved Styles, `new_from_shape`, Moho 14 Brushes + Smart Line Boil).",
   "- Use `action_createSmartBone` (standard and exact +/-360-deg turnarounds), `animation_createCycle`, `animation_retime`, `animation_tween`, `timeline_markers`, `fbf_manage`, `layer_setMasking`, `layer_setLayerOrder`, `bone_manageGroup` (Vitruvian Bones), `bone_mirror`, `bone_freezePose`, `bone_setWind`, `physics_configure`, `particle_configure`, and `layercomp_manage` for Moho Pro 14.4 workflows.",
@@ -95,11 +131,13 @@ async function handleMessage(msg) {
 
   try {
     if (method === "initialize") {
+      const negotiated = negotiateProtocolVersion(params && params.protocolVersion);
       sendResult(id, {
-        protocolVersion: PROTOCOL_VERSION,
+        protocolVersion: negotiated,
         capabilities: {
           tools: {},
           resources: {},
+          prompts: {},
         },
         serverInfo: SERVER_INFO,
       });
@@ -113,10 +151,11 @@ async function handleMessage(msg) {
 
     if (method === "tools/list") {
       sendResult(id, {
-        tools: TOOLS.map(({ name, description, inputSchema }) => ({
+        tools: ACTIVE_TOOLS.map(({ name, description, inputSchema, annotations }) => ({
           name,
           description,
           inputSchema,
+          annotations,
         })),
       });
       return;
@@ -141,8 +180,8 @@ async function handleMessage(msg) {
           },
           {
             uri: "moho-studio://playbook",
-            name: "Moho Pro 14.4 Master Playbook",
-            description: "15 distilled Moho Pro 14.4 rigging, vector shading, animation, and glTF master rules plus Lua engine invariants",
+            name: "Moho Pro 14.4 Authoring Playbook",
+            description: "16 Moho Pro 14.4 rigging, studio control panel, character performance, vector shading, animation, and glTF rules plus Lua engine invariants",
             mimeType: "text/markdown",
           },
         ],
@@ -176,6 +215,38 @@ async function handleMessage(msg) {
         return;
       }
       sendError(id, -32602, `Unknown resource URI: ${params && params.uri}`);
+      return;
+    }
+
+    if (method === "prompts/list") {
+      sendResult(id, {
+        prompts: PROMPTS.map(({ name, description, arguments: promptArgs }) => ({
+          name,
+          description,
+          arguments: promptArgs,
+        })),
+      });
+      return;
+    }
+
+    if (method === "prompts/get") {
+      const promptName = params && params.name;
+      const promptDef = PROMPT_BY_NAME.get(promptName);
+      if (!promptDef) {
+        sendError(id, -32602, `Unknown prompt: ${promptName}`);
+        return;
+      }
+      const promptArgs = (params && params.arguments) || {};
+      for (const argSpec of promptDef.arguments || []) {
+        if (argSpec.required && (!promptArgs[argSpec.name] || String(promptArgs[argSpec.name]).trim() === "")) {
+          sendError(id, -32602, `Missing required prompt argument '${argSpec.name}' for '${promptName}'`);
+          return;
+        }
+      }
+      sendResult(id, {
+        description: promptDef.description,
+        messages: promptDef.buildMessages(promptArgs),
+      });
       return;
     }
 

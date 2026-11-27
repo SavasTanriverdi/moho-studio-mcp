@@ -1,5 +1,5 @@
 -- **************************************************
--- Moho Studio MCP v3.0.0 - Menu Server Script (Moho Pro 14.4 / Lua 5.4)
+-- Moho Studio MCP v3.1.0 - Menu Server Script (Moho Pro 14.4 / Lua 5.4)
 -- **************************************************
 
 ScriptName = "MohoStudioMCP_Server"
@@ -19,11 +19,11 @@ function MohoStudioMCP_Server:Name()
 end
 
 function MohoStudioMCP_Server:Version()
-	return "3.0.0"
+	return "3.1.0"
 end
 
 function MohoStudioMCP_Server:Description()
-	return "Start/Stop Moho Studio MCP v3.0.0 server for full live MCP client control"
+	return "Start/Stop Moho Studio MCP v3.1.0 server for full live MCP client control"
 end
 
 function MohoStudioMCP_Server:Creator()
@@ -129,6 +129,8 @@ local function loadModules(baseDir)
 		{ "document.renderRange", docTools.renderRange },
 		{ "document.exportGltf", gltfTools.exportGltf },
 		{ "rig.auditGltf", gltfTools.auditGltf },
+		{ "rig.audit", boneTools.auditRig },
+		{ "rig.getControls", boneTools.getControls },
 		{ "layercomp.list", docTools.layerCompList },
 		{ "layercomp.manage", docTools.layerCompManage },
 
@@ -150,11 +152,13 @@ local function loadModules(baseDir)
 		{ "layer.referenceManage", layTools.referenceManage },
 		{ "layer.renderImage", layTools.renderImage },
 		{ "switch.setActive", specTools.switchSetActive },
+		{ "switch.importLipSync", specTools.switchImportLipSync },
 		{ "fbf.manage", specTools.fbfManage },
 		{ "particle.configure", specTools.particleConfigure },
 
 		{ "bone.list", boneTools.list },
 		{ "bone.create", boneTools.create },
+		{ "bone.createSmartDial", boneTools.createSmartDial },
 		{ "bone.delete", boneTools.deleteBone },
 		{ "bone.setTransform", boneTools.setTransform },
 		{ "bone.setProperties", boneTools.setProperties },
@@ -197,7 +201,7 @@ local function loadModules(baseDir)
 	for i = 1, #regs do
 		srv.registerHandler(regs[i][1], regs[i][2])
 	end
-	print("[MohoStudioMCP] Registered " .. tostring(#regs) .. " live v3.0.0 handlers")
+	print("[MohoStudioMCP] Registered " .. tostring(#regs) .. " live v3.1.0 handlers")
 
 	MohoStudioMCP_Server.server = srv
 	MohoStudioMCP_Server.isLoaded = true
@@ -364,9 +368,9 @@ function MohoStudioMCP_Server:Run(moho)
 			srv.poll(moho, "command")
 			LM.GUI.Alert(
 				LM.GUI.ALERT_INFO,
-				"MohoStudioMCP Server v3.0.0 started!",
+				"MohoStudioMCP Server v3.1.0 started!",
 				"IPC directory: " .. srv.getInfo().ipcDir,
-				"78 tools ready (crash-safe HandleMessage MCP Sync + DrawMe).",
+				"82 tools ready (crash-safe HandleMessage MCP Sync + DrawMe).",
 				MOHO.Localize("/Scripts/OK=OK"),
 				nil, nil
 			)
