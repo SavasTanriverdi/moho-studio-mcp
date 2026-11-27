@@ -256,6 +256,17 @@ async function handleMessage(msg) {
   }
 }
 
+let inFlight = 0;
+let stdinClosed = false;
+let draining = false;
+
+function maybeDrainAndExit() {
+  if (draining || !stdinClosed || inFlight > 0) return;
+  draining = true;
+  ipc.stopKeepAlive();
+  process.stdout.end();
+}
+
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 rl.on("line", (line) => {
   const trimmed = line.trim();
@@ -267,16 +278,25 @@ rl.on("line", (line) => {
     sendError(null, -32700, `Parse error: ${err.message}`);
     return;
   }
-  handleMessage(parsed).catch((err) => {
-    process.stderr.write(`[moho-studio-mcp] Unhandled error: ${err.stack || err}\n`);
-  });
+  inFlight += 1;
+  handleMessage(parsed)
+    .catch((err) => {
+      process.stderr.write(`[moho-studio-mcp] Unhandled error: ${err.stack || err}\n`);
+    })
+    .finally(() => {
+      inFlight -= 1;
+      maybeDrainAndExit();
+    });
 });
 
-function shutdown() {
+function forceShutdown() {
   ipc.stopKeepAlive();
   process.exit(0);
 }
 
-rl.on("close", shutdown);
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+rl.on("close", () => {
+  stdinClosed = true;
+  maybeDrainAndExit();
+});
+process.on("SIGINT", forceShutdown);
+process.on("SIGTERM", forceShutdown);
