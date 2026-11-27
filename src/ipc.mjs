@@ -262,6 +262,7 @@ export class MohoIpcClient {
     }
     try {
       this.ensureIpcDir();
+      cleanupStaleKeepAliveScripts(this.ipcDir);
       this.keepAliveScriptPath = path.join(this.ipcDir, `.keepalive_${process.pid}.ps1`);
       fs.writeFileSync(this.keepAliveScriptPath, buildKeepAlivePs(this.ipcDir), "utf8");
       this.keepAliveProc = spawn(
@@ -272,22 +273,19 @@ export class MohoIpcClient {
       this.keepAliveProc.on("exit", () => {
         this.keepAliveProc = null;
       });
-    } catch {
+    } catch (err) {
+      process.stderr.write(`[moho-studio-mcp] Keep-alive spawn skipped: ${err.message || err}\n`);
       this.keepAliveProc = null;
     }
   }
 
   stopKeepAlive() {
     if (this.keepAliveProc) {
-      try {
-        this.keepAliveProc.kill();
-      } catch {}
+      safeKill(this.keepAliveProc);
       this.keepAliveProc = null;
     }
     if (this.keepAliveScriptPath) {
-      try {
-        fs.unlinkSync(this.keepAliveScriptPath);
-      } catch {}
+      safeUnlink(this.keepAliveScriptPath);
       this.keepAliveScriptPath = null;
     }
   }
@@ -329,15 +327,23 @@ export class MohoIpcClient {
     let pollerTried = false;
     while (Date.now() < deadline) {
       if (fs.existsSync(respPath)) {
-        let raw = "";
+        let parsed;
         try {
-          raw = fs.readFileSync(respPath, "utf8");
-          fs.unlinkSync(respPath);
-        } catch {
-          await sleep(15);
-          continue;
+          const raw = fs.readFileSync(respPath, "utf8");
+          if (!raw || raw.trim().length === 0) {
+            await sleep(15);
+            continue;
+          }
+          parsed = JSON.parse(raw);
+        } catch (err) {
+          // Retry briefly on transient read/AV-lock or partial-flush races before timing out
+          if (err && (err.code === "EBUSY" || err.code === "EACCES" || err.code === "ENOENT" || err instanceof SyntaxError)) {
+            await sleep(15);
+            continue;
+          }
+          throw err;
         }
-        const parsed = JSON.parse(raw);
+        safeUnlink(respPath);
         if (parsed.error) {
           throw new Error(parsed.error.message || "Moho Lua error");
         }
@@ -358,9 +364,7 @@ export class MohoIpcClient {
       await sleep(TIMEOUTS.pollIntervalMs);
     }
 
-    try {
-      if (fs.existsSync(reqPath)) fs.unlinkSync(reqPath);
-    } catch {}
+    safeUnlink(reqPath);
     throw new Error(
       `MohoStudioMCP request timed out after ${timeoutMs}ms for '${method}'. ` +
         "Ensure Moho Pro 14 is not minimized, no modal dialog is blocking Moho, and MohoStudioMCP Server is running."
@@ -762,7 +766,7 @@ Write-Output ($outObj | ConvertTo-Json -Compress)
     if (fs.existsSync(logPath)) {
       renderLog = fs.readFileSync(logPath, "utf8");
       if (params.keepLog !== true) {
-        try { fs.unlinkSync(logPath); } catch {}
+        safeUnlink(logPath);
       }
     }
 
@@ -789,6 +793,50 @@ Write-Output ($outObj | ConvertTo-Json -Compress)
       elapsedMs,
       renderLog: renderLog.trim(),
     };
+  }
+}
+
+function safeUnlink(filePath) {
+  try {
+    fs.unlinkSync(filePath);
+  } catch (err) {
+    if (err && !["ENOENT", "EPERM", "EBUSY"].includes(err.code)) {
+      process.stderr.write(`[moho-studio-mcp] Cleanup unlink warning (${filePath}): ${err.message}\n`);
+    }
+  }
+}
+
+function safeKill(proc) {
+  try {
+    proc.kill();
+  } catch (err) {
+    if (err && !["ESRCH", "EPERM"].includes(err.code)) {
+      process.stderr.write(`[moho-studio-mcp] Cleanup kill warning: ${err.message}\n`);
+    }
+  }
+}
+
+function cleanupStaleKeepAliveScripts(ipcDir) {
+  const cutoffMs = Date.now() - 60 * 60 * 1000;
+  try {
+    for (const name of fs.readdirSync(ipcDir)) {
+      if (!name.startsWith(".keepalive_") || !name.endsWith(".ps1")) continue;
+      const full = path.join(ipcDir, name);
+      try {
+        const st = fs.statSync(full);
+        if (st.mtimeMs < cutoffMs) {
+          safeUnlink(full);
+        }
+      } catch (err) {
+        if (err && err.code !== "ENOENT") {
+          process.stderr.write(`[moho-studio-mcp] Stale script stat skipped (${name}): ${err.message}\n`);
+        }
+      }
+    }
+  } catch (err) {
+    if (err && err.code !== "ENOENT") {
+      process.stderr.write(`[moho-studio-mcp] Stale script scan skipped: ${err.message}\n`);
+    }
   }
 }
 

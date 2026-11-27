@@ -33,6 +33,16 @@ async function run() {
       let resp;
       if (req.method === "fail.test") {
         resp = { jsonrpc: "2.0", id: req.id, error: { code: -32603, message: "simulated lua failure" } };
+      } else if (req.method === "transient.empty") {
+        // Simulate a brief 0-byte/partial file race before the atomic rename completes
+        fs.writeFileSync(respPath, "", "utf8");
+        const finalResp = { jsonrpc: "2.0", id: req.id, result: { recovered: true } };
+        setTimeout(() => {
+          fs.writeFileSync(respTmp, JSON.stringify(finalResp), "utf8");
+          fs.renameSync(respTmp, respPath);
+        }, 35);
+        handled += 1;
+        continue;
       } else {
         resp = { jsonrpc: "2.0", id: req.id, result: { echoedMethod: req.method, seq: req.params.seq, client: req.params.client } };
       }
@@ -64,6 +74,10 @@ async function run() {
       assert.equal(results[i * 2 + 1].client, "codex");
       assert.equal(results[i * 2 + 1].seq, i);
     }
+
+    // Verify transient empty response file retries cleanly instead of crashing on SyntaxError
+    const recovered = await clientA.send("transient.empty", {}, 4000);
+    assert.equal(recovered.recovered, true);
 
     // Verify error propagation
     await assert.rejects(

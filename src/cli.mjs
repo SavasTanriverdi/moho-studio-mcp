@@ -272,8 +272,8 @@ export function runDoctor(options = {}) {
   if (fs.existsSync(statusPath)) {
     try {
       ipcStatus = JSON.parse(fs.readFileSync(statusPath, "utf8"));
-    } catch {
-      ipcStatus = { running: false, parseError: true };
+    } catch (err) {
+      ipcStatus = { running: false, parseError: err.message || "invalid JSON" };
     }
   }
 
@@ -343,7 +343,14 @@ export function runInstall(options = {}) {
   const homeDir = options.homeDir || os.homedir();
   const pkgRoot = options.pkgRoot || PACKAGE_ROOT;
   const ipcDir = options.ipcDir ? path.resolve(options.ipcDir) : getIpcDir();
-  const toolProfile = options.tools ? resolveToolProfile(options.tools) : "full";
+  let toolProfile = "full";
+  if (options.tools !== null && options.tools !== undefined && String(options.tools).trim() !== "") {
+    const rawProfile = String(options.tools).trim().toLowerCase();
+    if (!TOOL_PROFILES.includes(rawProfile)) {
+      throw new Error(`Unsupported --tools profile '${options.tools}' (supported: ${TOOL_PROFILES.join(", ")})`);
+    }
+    toolProfile = resolveToolProfile(rawProfile);
+  }
   const removeLegacy = Boolean(options.removeLegacy);
   const useNpx = options.useNpx !== null && options.useNpx !== undefined ? Boolean(options.useNpx) : isNpxCacheDir(pkgRoot);
 
@@ -599,14 +606,15 @@ function formatDoctorText(res) {
 
 export async function runCli(argv) {
   const cmd = argv[0];
-  const flags = parseCliFlags(argv.slice(1));
+  const rest = argv.slice(1);
+  const flags = parseCliFlags(rest);
 
   try {
     if (cmd === "--version" || cmd === "-v") {
       process.stdout.write(`moho-studio-mcp ${SERVER_INFO.version}\n`);
       return 0;
     }
-    if (cmd === "--help" || cmd === "-h" || cmd === "help") {
+    if (cmd === "--help" || cmd === "-h" || cmd === "help" || rest.includes("--help") || rest.includes("-h")) {
       process.stdout.write(formatHelp() + "\n");
       return 0;
     }

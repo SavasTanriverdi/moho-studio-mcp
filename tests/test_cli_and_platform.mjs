@@ -135,9 +135,20 @@ function run() {
     assert.ok(getToolsForProfile("vector").some((t) => t.name === "style_manage"));
     assert.equal(getToolsForProfile("unknown_profile").length, TOOLS.length);
 
-    // 9. Subprocess CLI smoke tests (--version, doctor --json)
+    // 9. Subprocess CLI smoke tests (--version, subcommand --help, doctor --json, invalid --tools)
     const verOut = execFileSync(process.execPath, [serverPath, "--version"], { encoding: "utf8" }).trim();
     assert.equal(verOut, "moho-studio-mcp 3.1.0");
+
+    const helpInstall = execFileSync(process.execPath, [serverPath, "install", "--help"], { encoding: "utf8" });
+    assert.ok(helpInstall.includes("moho-studio-mcp install"));
+
+    const helpDoctor = execFileSync(process.execPath, [serverPath, "doctor", "--help"], { encoding: "utf8" });
+    assert.ok(helpDoctor.includes("moho-studio-mcp doctor"));
+
+    assert.throws(
+      () => runInstall({ apply: false, scope: "plugin", mohoScriptsDir: fakeScripts, tools: "bogus_profile" }),
+      /Unsupported --tools profile/
+    );
 
     const doctorOut = execFileSync(
       process.execPath,
