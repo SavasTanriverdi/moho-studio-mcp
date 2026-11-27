@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.SavasTanriverdi/moho-studio-mcp",
   "title": "Moho Studio MCP",
-  "description": "MCP server and Lua 5.4 plugin for live 2D animation, rigging, lip-sync, glTF, and CLI rendering in Moho 14.4",
+  "description": "MCP server and Lua plugin for 2D animation, rigging, lip-sync, glTF, and CLI render in Moho 14.4",
   "version": "3.1.0",
   "websiteUrl": "https://github.com/SavasTanriverdi/moho-studio-mcp",
   "repository": {
