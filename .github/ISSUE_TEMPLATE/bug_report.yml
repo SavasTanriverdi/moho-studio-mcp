@@ -1,0 +1,61 @@
+name: Bug Report
+description: Report a bug in the Node MCP server, CLI installer, or Moho Pro 14.4 Lua plugin
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the bug and what you expected to happen instead.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Operating System
+      options:
+        - Windows 11 (x64)
+        - Windows 10 (x64)
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux
+    validations:
+      required: true
+
+  - type: input
+    id: moho_version
+    attributes:
+      label: Moho Version
+      placeholder: "e.g. Moho Pro 14.4"
+    validations:
+      required: true
+
+  - type: input
+    id: client
+    attributes:
+      label: MCP Client
+      placeholder: "e.g. Claude Desktop, Cursor, VS Code, Codex, Antigravity"
+    validations:
+      required: false
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `npx moho-studio-mcp doctor --json`
+      description: Please paste the diagnostic output (redact any paths you do not want to share).
+      render: json
+    validations:
+      required: false
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Include the tool name and arguments if a specific tool failed.
+      placeholder: |
+        1. Open a new document in Moho 14.4
+        2. Call ...
+        3. Observe error ...
+    validations:
+      required: true

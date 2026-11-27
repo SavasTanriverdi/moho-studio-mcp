@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Setup and Troubleshooting Docs
+    url: https://github.com/SavasTanriverdi/moho-studio-mcp#readme
+    about: Check installation steps, tool profiles, and known Moho 14.4 limitations before opening an issue.

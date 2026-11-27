@@ -15,6 +15,7 @@
     "docs/ARCHITECTURE.md",
     "docs/MOHO_14_4_LUA_API_VERIFIED.md",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     "llms.txt",
     "server.json",

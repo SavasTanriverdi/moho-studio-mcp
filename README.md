@@ -177,7 +177,7 @@ Notable Moho 14.4 behaviors handled directly by the tools:
 
 ## Repository Layout
 
-- `src/`: Node.js stdio MCP server (`server.mjs`), JSON Schemas + annotations + tool profiles (`tools.mjs`), setup CLI and doctor (`cli.mjs`), MCP prompts (`prompts.mjs`), IPC client + host helpers (`ipc.mjs`), runtime config (`config.mjs`), and `moho-studio://playbook` (`playbook.mjs`).
+- `src/`: Node.js stdio MCP server (`server.mjs`), domain tool schemas (`src/tools/*.mjs` aggregated by `tools.mjs`), setup CLI and doctor (`cli.mjs`), MCP prompts (`prompts.mjs`), IPC client + host helpers (`ipc.mjs`), runtime config (`config.mjs`), and `moho-studio://playbook` (`playbook.mjs`).
 - `moho-plugin/`: Moho Pro 14.4 Menu script, Poller tool, toolbar icons (`24x20` and `48x40`), Lua JSON codec, Bowyer-Watson Delaunay triangulator, and modular tool handlers.
 - `scripts/`: Legacy Python installer (`install.py`), offline hygiene and 1:1 RPC parity checker (`check_hygiene.py`), and SDF icon generator (`generate_icons.py`).
 - `tests/`: MCP stdio protocol tests (`test_mcp_protocol.mjs`), concurrent dual-client mock IPC tests (`test_ipc_mock.mjs`), and Node CLI / platform / profile tests (`test_cli_and_platform.mjs`).
