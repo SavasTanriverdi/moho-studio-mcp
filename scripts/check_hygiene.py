@@ -91,17 +91,25 @@ def main():
         if depth != 0:
             errors.append(f"{lua_path.relative_to(REPO)}: unbalanced Lua block keywords (depth={depth})")
 
-    # Verify every rpcMethod declared in src/tools.mjs is registered in MohoStudioMCP_Server.lua
-    tools_src = (REPO / "src/tools.mjs").read_text("utf-8")
+    # Verify every rpcMethod declared across src/tools.mjs and src/tools/*.mjs is registered 1:1 in MohoStudioMCP_Server.lua
+    tool_files = [REPO / "src/tools.mjs"]
+    tools_dir = REPO / "src/tools"
+    if tools_dir.is_dir():
+        tool_files.extend(sorted(tools_dir.glob("*.mjs")))
+    tools_src = "\n".join(p.read_text("utf-8") for p in tool_files if p.is_file())
     lua_srv = (REPO / "moho-plugin/MohoStudioMCP_Server.lua").read_text("utf-8")
-    node_methods = set(re.findall(r'rpcMethod:\s*"([^"]+)"', tools_src))
+    node_method_list = re.findall(r'rpcMethod:\s*"([^"]+)"', tools_src)
+    if len(node_method_list) != len(set(node_method_list)):
+        dups = sorted({m for m in node_method_list if node_method_list.count(m) > 1})
+        errors.append(f"Duplicate rpcMethod declarations in src/tools: {dups}")
+    node_methods = set(node_method_list)
     lua_methods = set(re.findall(r'\{\s*"([a-z]+\.[a-zA-Z]+)"\s*,', lua_srv))
     missing_in_lua = sorted(node_methods - lua_methods)
     missing_in_node = sorted(lua_methods - node_methods)
     if missing_in_lua:
-        errors.append(f"RPC methods declared in src/tools.mjs but missing in Lua server: {missing_in_lua}")
+        errors.append(f"RPC methods declared in src/tools but missing in Lua server: {missing_in_lua}")
     if missing_in_node:
-        errors.append(f"RPC methods registered in Lua server but missing in src/tools.mjs: {missing_in_node}")
+        errors.append(f"RPC methods registered in Lua server but missing in src/tools: {missing_in_node}")
 
     if errors:
         for e in errors:
